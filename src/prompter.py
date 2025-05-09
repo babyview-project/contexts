@@ -12,7 +12,7 @@ import numpy as np
 from vllm import LLM, SamplingParams
 from vllm.sampling_params import GuidedDecodingParams
 
-activities = ["being held", "eating", "drinking", "playing with toy", "getting changed", "crawling", "crying", "exploring", "cleaning", "gardening", "watching tv", "driving", "reading", "nothing", "cooking"]
+activities = ["being held", "eating", "drinking", "playing with toy", "getting changed", "crawling", "crying", "exploring", "cooking", "cleaning", "gardening", "watching tv", "driving", "reading", "on the phone talking", "dancing", "packing", "dancing"]
 first_word_to_activity = {}
 for activity in activities:
     first_word = activity.split()[0]
@@ -78,24 +78,21 @@ for batch in tqdm(range(total_prompt_batches), desc="Retrieving probabilities fo
         text_options_list = list(text_options_dict.keys())
         probs_list = [text_options_dict[opt] for opt in text_options_list]
         
-        #samples_list = list(samples_dict.keys())
-        #sample_probs_list = [samples_dict[sample] for sample in samples_list]
-        
         # Apply softmax to probabilities
         probs_softmax = softmax(np.array(probs_list))
-        #sample_probs_softmax = softmax(np.array(sample_probs_list))
-        
+
+        # Filter out probabilities below 1%
+        filtered = [(opt, round(prob, 2)) for opt, prob in zip(text_options_list, probs_softmax) if prob >= 0.1]
+
+        # Separate filtered options and probabilities
+        filtered_text_options, filtered_probs = zip(*filtered) if filtered else ([], [])
+
         # Create comma-separated strings
-        text_options_str = ",".join(text_options_list)
-        probs_str = ",".join([str(prob) for prob in probs_softmax])
-        #samples_str = ",".join(samples_list)
-        #sample_probs_str = ",".join([str(prob) for prob in sample_probs_softmax])
+        text_options_str = ",".join(filtered_text_options)
+        probs_str = ",".join([str(prob) for prob in filtered_probs])
         
-        # Update the dataframe with new columns
         mask = current_batch["video_path"] == vid_path
         current_batch.loc[mask, "text_options"] = text_options_str
         current_batch.loc[mask, "text_probs"] = probs_str
-        #current_batch.loc[mask, "samples"] = samples_str
-        #current_batch.loc[mask, "sample_probs"] = sample_probs_str
     
     update_csv_with_batch_results(current_batch, vid_paths)

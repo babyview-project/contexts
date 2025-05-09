@@ -8,7 +8,7 @@ BASE_DIR = Path("/ccn2/dataset/babyview/outputs_20250312")
 RANDOM_VIDEO_PATHS = "random_video_paths.csv"
 CHUNKS_DIR = BASE_DIR / "activities/chunks"
 TRANSCRIPTS_DIR = BASE_DIR / "transcripts/diarised"
-OUTPUT_CSV = "selected_chunk_transcripts.csv"
+OUTPUT_CSV = "selected_chunk_transcripts_0508.csv"
 
 def main():
     # Load video paths
@@ -18,7 +18,7 @@ def main():
     selected_chunk_ids = set()
     
     # Keep selecting until we have 100 unique chunks
-    while len(selected_chunks) < 100:
+    while len(selected_chunks) < 1000:
         # Select random video
         video_path = random.choice(video_paths)
         videostem = Path(video_path).stem.removesuffix("_processed")

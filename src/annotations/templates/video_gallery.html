@@ -3,33 +3,240 @@
 <head>
     <title>Video Gallery</title>
     <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .search-container {
+            max-width: 800px;
+            margin: 0 auto 30px auto;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .search-form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .search-input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        
+        .search-type {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        
+        .search-button {
+            padding: 10px 20px;
+            background-color: #4285f4;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        .search-button:hover {
+            background-color: #3367d6;
+        }
+        
+        .search-results {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
+        
         .gallery {
             display: flex;
             flex-wrap: wrap;
             gap: 30px;
+            justify-content: center;
         }
+        
         .item {
             width: 300px;
             text-align: center;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            padding-bottom: 15px;
+            transition: transform 0.3s ease;
+            margin-bottom: 20px;
         }
+        
+        .item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
         video {
             width: 100%;
-            border-radius: 10px;
+            border-radius: 8px 8px 0 0;
+            background-color: #000;
+        }
+        
+        .item p {
+            padding: 0 15px;
+            font-size: 14px;
+            line-height: 1.4;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .navigation {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        
+        .nav-button {
+            padding: 10px 20px;
+            margin: 0 10px;
+            background-color: #4285f4;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            transition: background-color 0.3s ease;
+        }
+        
+        .nav-button:hover {
+            background-color: #3367d6;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 30px 0;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .pagination a {
+            display: inline-block;
+            padding: 8px 16px;
+            text-decoration: none;
+            color: #444;
+            background-color: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+        }
+        
+        .pagination a:hover:not(.active) {
+            background-color: #f1f1f1;
+        }
+        
+        .pagination a.active {
+            background-color: #4285f4;
+            color: white;
+            border-color: #4285f4;
+        }
+        
+        .pagination a.disabled {
+            color: #999;
+            cursor: not-allowed;
+        }
+        
+        .pagination-info {
+            text-align: center;
+            color: #666;
+            margin-bottom: 10px;
+            font-style: italic;
         }
     </style>
 </head>
 <body>
     <h1>Video Gallery</h1>
-    <div class="gallery">
-        {% for path, text in items %}
-            <div class="item">
-                <video controls>
-                    <source src="{{ url_for('serve_video', filename=path) }}" type="video/mp4">
-                    Your browser does not support the video tag.
-                </video>
-                <p>{{ text|safe }}</p>
-            </div>
-        {% endfor %}
+    
+    <div class="navigation">
+        <a href="/" class="nav-button">Image Gallery</a>
+        <a href="/videos" class="nav-button">Video Gallery</a>
     </div>
+    
+    <div class="search-container">
+        <form class="search-form" action="/videos" method="get">
+            <input type="text" name="search" placeholder="Search..." class="search-input" value="{{ search_term }}">
+            <select name="search_type" class="search-type">
+                <option value="all" {% if search_type == 'all' %}selected{% endif %}>All</option>
+                <option value="transcript" {% if search_type == 'transcript' %}selected{% endif %}>Transcript</option>
+                <option value="activity" {% if search_type == 'activity' %}selected{% endif %}>Activity</option>
+            </select>
+            <button type="submit" class="search-button">Search</button>
+        </form>
+        
+        {% if search_term %}
+        <div class="search-results">
+            <p>Showing results for "{{ search_term }}" in {{ search_type }} ({{ total_items }} results found)</p>
+        </div>
+        {% endif %}
+    </div>
+    
+    <div class="gallery">
+        {% if items|length > 0 %}
+            {% for path, text in items %}
+                <div class="item">
+                    <video controls>
+                        <source src="{{ url_for('serve_video', filename=path) }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                    <p>{{ text|safe }}</p>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>No videos found matching your search criteria.</p>
+        {% endif %}
+    </div>
+    
+    {% if total_pages > 1 %}
+    <div class="pagination-info">
+        Page {{ page }} of {{ total_pages }} ({{ total_items }} total videos)
+    </div>
+    <div class="pagination">
+        {% if page > 1 %}
+            <a href="{{ url_for('videos', page=page-1, search=search_term, search_type=search_type) }}">&laquo; Previous</a>
+        {% else %}
+            <a class="disabled">&laquo; Previous</a>
+        {% endif %}
+        
+        {% set start_page = [1, page - 2]|max %}
+        {% set end_page = [start_page + 4, total_pages + 1]|min %}
+        {% set start_page = [end_page - 5, 1]|max %}
+        
+        {% for p in range(start_page, end_page) %}
+            <a href="{{ url_for('videos', page=p, search=search_term, search_type=search_type) }}" 
+               {% if p == page %}class="active"{% endif %}>
+                {{ p }}
+            </a>
+        {% endfor %}
+        
+        {% if page < total_pages %}
+            <a href="{{ url_for('videos', page=page+1, search=search_term, search_type=search_type) }}">Next &raquo;</a>
+        {% else %}
+            <a class="disabled">Next &raquo;</a>
+        {% endif %}
+    </div>
+    {% endif %}
 </body>
 </html>

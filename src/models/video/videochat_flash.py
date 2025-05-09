@@ -6,6 +6,7 @@ from models.video_captioner import VideoCaptioner
 
 load_dotenv()
 
+# pip install transformers==4.40.1
 token = os.environ['HF_TOKEN']
 class VideoFlash(VideoCaptioner):
     def __init__(self):
@@ -25,7 +26,7 @@ class VideoFlash(VideoCaptioner):
         self.generation_config = dict(
                 do_sample=False,
                 temperature=0.0,
-                max_new_tokens=300,
+                max_new_tokens=100,
                 top_p=0.1,
                 num_beams=1
         )
