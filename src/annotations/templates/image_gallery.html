@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Image Gallery</title>
+    <style>
+        .gallery {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .item {
+            text-align: center;
+        }
+        .item img {
+            max-width: 200px;
+            height: auto;
+            border-radius: 10px;
+        }
+        .item p {
+            max-width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Image Gallery</h1>
+    <div class="gallery">
+        {% for path, text in items %}
+            <div class="item">
+                <img src="{{ url_for('serve_image', filename=path) }}" alt="Image">
+                <p>{{ text|safe }}</p>
+            </div>
+        {% endfor %}
+    </div>
+</body>
+</html>

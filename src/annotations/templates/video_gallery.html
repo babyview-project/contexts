@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Video Gallery</title>
+    <style>
+        .gallery {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 30px;
+        }
+        .item {
+            width: 300px;
+            text-align: center;
+        }
+        video {
+            width: 100%;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Video Gallery</h1>
+    <div class="gallery">
+        {% for path, text in items %}
+            <div class="item">
+                <video controls>
+                    <source src="{{ url_for('serve_video', filename=path) }}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+                <p>{{ text|safe }}</p>
+            </div>
+        {% endfor %}
+    </div>
+</body>
+</html>
