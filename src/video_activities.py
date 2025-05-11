@@ -3,7 +3,7 @@ import pandas as pd
 from models.video.videochat_flash import VideoFlash
 from models.image.internvl import InternVL
 locations = ["bathroom", "bedroom", "car", "closet", "garage", "living room", "hallway", "outside", "garage", "kitchen", "deck"]
-activities = ["being held", "eating", "drinking", "playing with toy", "getting changed", "crawling", "crying", "exploring", "cooking", "cleaning", "gardening", "watching tv", "driving", "reading", "on a phone call", "dancing", "packing", "looking at phone", "singing"]
+activities = ["being held", "eating", "drinking", "playing with toy", "getting changed", "crawling", "crying", "exploring", "cooking", "cleaning", "gardening", "watching tv", "driving", "reading", "on a phone call", "dancing", "packing", "looking at phone", "instrument playing", "exercising", "working on laptop", "nothing"]
 video_generator = VideoFlash()
 chatter = InternVL()
 chunks = pd.read_csv("selected_chunk_transcripts_0508.csv")

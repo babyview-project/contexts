@@ -5,6 +5,7 @@ import subprocess
 import numpy as np
 from decord import VideoReader, cpu
 import pandas as pd
+import re
 
 def split_video_fast(video_path, chunk_size_sec, output_dir, keep_audio=True):
     """
@@ -175,42 +176,118 @@ def softmax(logits):
     return exps / np.sum(exps)
 
 
-def update_csv_with_batch_results(current_batch, vid_paths, df_name="video_activities_locations_probs.csv"):
+def update_csv_with_batch_results(current_batch, vid_paths, df_name="video_activities_locations_probs.csv", keypath="image_path"):
     """
     Update the main CSV file with results from the current batch
     
     Args:
         current_batch: DataFrame containing updated data for the current batch
-        vid_paths: List of video paths processed in the current batch
+        vid_paths: List of video/image paths processed in the current batch
     """
     try:
-        # Read the original CSV file
-        original_df = pd.read_csv(df_name)
-        
-        # Make sure all required columns exist in the original DataFrame
-        new_columns = ["text_options", "text_probs"] #"samples", "sample_probs"
-        for col in new_columns:
-            if col not in original_df.columns:
-                original_df[col] = ""
-        
-        # Filter the current batch to include only processed video paths
-        updated_batch = current_batch[current_batch["video_path"].isin(vid_paths)].copy()
-        
-        # Create an index based on video_path for efficient updates
-        original_df.set_index("video_path", inplace=True)
-        updated_batch.set_index("video_path", inplace=True)
-        
-        # Update the original DataFrame with values from the current batch
-        for idx in updated_batch.index:
-            if idx in original_df.index:
-                for col in new_columns:
-                    original_df.loc[idx, col] = updated_batch.loc[idx, col]
-        
-        # Reset index before saving
-        original_df.reset_index(inplace=True)
-        
-        # Save the updated DataFrame
-        original_df.to_csv(df_name, index=False)
-        
+        updated_batch = current_batch[current_batch[keypath].isin(vid_paths)].copy()
+        if os.path.exists(df_name):
+            # Read the original CSV file
+            original_df = pd.read_csv(df_name)
+
+            # Merge the original and updated batch, prioritizing updated_batch values
+            combined_df = pd.concat([original_df, updated_batch], ignore_index=True)
+
+            # Drop duplicates based on keypath, keeping the last occurrence (i.e., from updated_batch)
+            combined_df.drop_duplicates(subset=keypath, keep='last', inplace=True)
+
+            # Save the combined DataFrame
+            combined_df.to_csv(df_name, index=False)
+        else:
+            # If the file doesn't exist, create a new one from the current batch
+            dir_name = os.path.dirname(df_name)
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
+            updated_batch.to_csv(df_name, index=False)
     except Exception as e:
         print(f"Error updating CSV: {e}")
+
+def assign_top_label_and_probs(generations, image_paths, label_type, choices_regex,current_batch=None):
+    """
+    Updates current_batch DataFrame with options, probabilities, and top choice for a given label type.
+    If current_batch is empty, it will be created with appropriate columns.
+    """
+    rows_to_add = []
+
+    for prompt_generation, image_path in zip(generations, image_paths):
+        text_options_dict = {}
+
+        for i, output in enumerate(prompt_generation.outputs):
+            curr_text = output.text
+            curr_prob = output.cumulative_logprob
+            text_options_dict[curr_text] = curr_prob
+
+            if i == 0:
+                for logprob in output.logprobs[0].values():
+                    if re.match(choices_regex, logprob.decoded_token):
+                        text_options_dict[logprob.decoded_token] = logprob.logprob
+
+        text_options_list = list(text_options_dict.keys())
+        probs_list = [text_options_dict[opt] for opt in text_options_list]
+        if not probs_list:
+            continue
+
+        probs_softmax = softmax(np.array(probs_list))
+        filtered = [(opt, round(prob, 2)) for opt, prob in zip(text_options_list, probs_softmax) if prob >= 0.1]
+        filtered_text_options, filtered_probs = zip(*filtered) if filtered else ([], [])
+
+        row = {
+            "image_path": image_path,
+            f"{label_type}_options": ",".join(filtered_text_options),
+            f"{label_type}_probs": ",".join(map(str, filtered_probs)),
+            label_type: filtered_text_options[np.argmax(filtered_probs)] if filtered_probs else ""
+        }
+        rows_to_add.append(row)
+
+    new_rows_df = pd.DataFrame(rows_to_add)
+
+    if current_batch is None or current_batch.empty:
+        return new_rows_df
+    else:
+        current_batch = current_batch.set_index("image_path")
+        new_rows_df = new_rows_df.set_index("image_path")
+        for col in new_rows_df.columns:
+            current_batch.loc[new_rows_df.index, col] = new_rows_df[col]
+        current_batch = current_batch.reset_index()
+        return current_batch
+
+def assign_devices_to_ranks(device_ids_str, num_parallel):
+    """
+    Assigns GPU devices to each parallel rank, supporting uneven splits.
+
+    Args:
+        device_ids_str (str): e.g. "[0,1,2,3,4]"
+        num_parallel (int): Number of parallel runs (ranks)
+
+    Returns:
+        dict: {rank_id: "0,1"} for setting CUDA_VISIBLE_DEVICES
+    """
+    device_ids = [int(id.strip()) for id in device_ids_str.strip("[]").split(",")]
+    num_devices = len(device_ids)
+
+    devices_per_run = num_devices // num_parallel
+    remaining_devices = num_devices % num_parallel
+
+    rank_device_dict = {}
+    start_idx = 0
+
+    for i in range(num_parallel):
+        end_idx = start_idx + devices_per_run
+        if i == num_parallel - 1:
+            end_idx += remaining_devices  # Add leftover devices to last rank
+        assigned_devices = device_ids[start_idx:end_idx]
+        rank_device_dict[i] = ",".join(map(str, assigned_devices))
+        start_idx = end_idx
+
+    return rank_device_dict
+
+def largest_factor_less_than(m, n):
+    for i in range(m, 0, -1): 
+        if n % i == 0:
+            return i
+    return None 

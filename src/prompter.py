@@ -12,7 +12,8 @@ import numpy as np
 from vllm import LLM, SamplingParams
 from vllm.sampling_params import GuidedDecodingParams
 
-activities = ["being held", "eating", "drinking", "playing with toy", "getting changed", "crawling", "crying", "exploring", "cooking", "cleaning", "gardening", "watching tv", "driving", "reading", "on the phone talking", "dancing", "packing", "dancing"]
+activities = ["being held", "eating", "drinking", "playing with toy", "getting changed", "crawling", "crying", "exploring", "cooking", "cleaning", "gardening", "watching tv", "driving", "reading", "on a phone call", "dancing", "packing", "looking at phone", "instrument playing", "exercising", "working on laptop", "nothing"]
+# singing
 first_word_to_activity = {}
 for activity in activities:
     first_word = activity.split()[0]
@@ -23,7 +24,7 @@ parser.add_argument("--batch", type=int, default=1, help="Batch number of total 
 parser.add_argument("--total_batches", type=int, default=1, help="Total batches being run in parallel.")
 parser.add_argument("--prompting_batch", type=int, default=1, help="How many prompts to pass into a single generate call")
 args = parser.parse_args()
-df = pd.read_csv("video_activities_locations_probs.csv")
+df = pd.read_csv("video_activities_locations_probs_0508.csv")
 current_batch = batcher(df, args.batch, args.total_batches) 
 len(current_batch)
 choices = [f"{regex_escape(str(choice))}" for choice in activities]
@@ -95,4 +96,4 @@ for batch in tqdm(range(total_prompt_batches), desc="Retrieving probabilities fo
         current_batch.loc[mask, "text_options"] = text_options_str
         current_batch.loc[mask, "text_probs"] = probs_str
     
-    update_csv_with_batch_results(current_batch, vid_paths)
+    update_csv_with_batch_results(current_batch, vid_paths, "video_activities_locations_probs_0508.csv")
