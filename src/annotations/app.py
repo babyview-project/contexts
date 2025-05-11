@@ -19,7 +19,7 @@ IMAGE_DIR = "/"
 
 # Load data
 image_descriptions_raw = pd.read_csv("/home/tsepuri/activitycap/src/image_activities_locations.csv")
-video_descriptions_raw = pd.read_csv("/home/tsepuri/activitycap/src/video_activities_locations_probs.csv")
+video_descriptions_raw = pd.read_csv("/home/tsepuri/activitycap/src/video_activities_locations_all.csv")
 
 image_descriptions = {
     "image_path": image_descriptions_raw["image_path"],
@@ -38,17 +38,15 @@ video_descriptions = {
     "location": video_descriptions_raw["location"],
     "activity": video_descriptions_raw["activity_transcript"],
     "transcript": video_descriptions_raw["transcript"],
-    "text": video_descriptions_raw["video_path"],
-    "text1": [
-        f"<b>Location: {loc}<br/>Activity (with transcript): {act_transcript}</b><br/>" +
-        f"Video description + transcript: {lm}" +
-        f"<br/>Text options: {text_options}<br/>Text probabilities: {text_probs}" +
+    "activity_llm": video_descriptions_raw["text_options"],
+    "text1": video_descriptions_raw["video_path"],
+    "text": [
+        f"<b>Location from VQA: {loc}<br/>Activity from VQA: {act_transcript}<br/>" +
+        f"<br/>Activities from LLM: {text_options}<br/>LLM probabilities: {text_probs}</b>" +
         f"<br/><br/> Transcript: {transcript}"
-        for loc, act, act_transcript, lm, transcript, text_options, text_probs in zip(
+        for loc, act_transcript, transcript, text_options, text_probs in zip(
             video_descriptions_raw["location"],
-            video_descriptions_raw["activity"],
             video_descriptions_raw["activity_transcript"],
-            video_descriptions_raw["vid_transcript_lm"],
             video_descriptions_raw["transcript"],
             video_descriptions_raw["text_options"],
             video_descriptions_raw["text_probs"]
@@ -97,10 +95,11 @@ def videos():
     if search_term:
         all_matched_items = []
         
-        for i, (path, loc, act, transcript, text) in enumerate(zip(
+        for i, (path, loc, act, act_llm, transcript, text) in enumerate(zip(
             video_descriptions["video_path"],
             video_descriptions["location"],
             video_descriptions["activity"],
+            video_descriptions["activity_llm"],
             video_descriptions["transcript"],
             video_descriptions["text"]
         )):
@@ -119,6 +118,8 @@ def videos():
             if search_type == 'transcript' and safe_contains(transcript, search_term):
                 match = True
             elif search_type == 'activity' and (safe_contains(act, search_term)):
+                match = True
+            elif search_type == "activity_llm" and (safe_contains(act_llm, search_term)):
                 match = True
             elif search_type == 'all' and (safe_contains(text, search_term)):
                 match = True

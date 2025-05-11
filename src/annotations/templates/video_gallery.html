@@ -174,41 +174,7 @@
         <a href="/" class="nav-button">Image Gallery</a>
         <a href="/videos" class="nav-button">Video Gallery</a>
     </div>
-    
-    <div class="search-container">
-        <form class="search-form" action="/videos" method="get">
-            <input type="text" name="search" placeholder="Search..." class="search-input" value="{{ search_term }}">
-            <select name="search_type" class="search-type">
-                <option value="all" {% if search_type == 'all' %}selected{% endif %}>All</option>
-                <option value="transcript" {% if search_type == 'transcript' %}selected{% endif %}>Transcript</option>
-                <option value="activity" {% if search_type == 'activity' %}selected{% endif %}>Activity</option>
-            </select>
-            <button type="submit" class="search-button">Search</button>
-        </form>
-        
-        {% if search_term %}
-        <div class="search-results">
-            <p>Showing results for "{{ search_term }}" in {{ search_type }} ({{ total_items }} results found)</p>
-        </div>
-        {% endif %}
-    </div>
-    
-    <div class="gallery">
-        {% if items|length > 0 %}
-            {% for path, text in items %}
-                <div class="item">
-                    <video controls>
-                        <source src="{{ url_for('serve_video', filename=path) }}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                    <p>{{ text|safe }}</p>
-                </div>
-            {% endfor %}
-        {% else %}
-            <p>No videos found matching your search criteria.</p>
-        {% endif %}
-    </div>
-    
+
     {% if total_pages > 1 %}
     <div class="pagination-info">
         Page {{ page }} of {{ total_pages }} ({{ total_items }} total videos)
@@ -238,5 +204,41 @@
         {% endif %}
     </div>
     {% endif %}
+    
+    <div class="search-container">
+        <form class="search-form" action="/videos" method="get">
+            <input type="text" name="search" placeholder="Search..." class="search-input" value="{{ search_term }}">
+            <select name="search_type" class="search-type">
+                <option value="all" {% if search_type == 'all' %}selected{% endif %}>All</option>
+                <option value="transcript" {% if search_type == 'transcript' %}selected{% endif %}>Transcript</option>
+                <option value="activity" {% if search_type == 'activity' %}selected{% endif %}>Activity (VQA)</option>
+                <option value="activity_llm" {% if search_type == 'activity_llm' %}selected{% endif %}>Activity (LLM)</option>
+            </select>
+            <button type="submit" class="search-button">Search</button>
+        </form>
+        
+        {% if search_term %}
+        <div class="search-results">
+            <p>Showing results for "{{ search_term }}" in {{ search_type }} ({{ total_items }} results found)</p>
+        </div>
+        {% endif %}
+    </div>
+    
+    <div class="gallery">
+        {% if items|length > 0 %}
+            {% for path, text in items %}
+                <div class="item">
+                    <video controls>
+                        <source src="{{ url_for('serve_video', filename=path) }}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                    <p>{{ text|safe }}</p>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>No videos found matching your search criteria.</p>
+        {% endif %}
+    </div>
+    
 </body>
 </html>
