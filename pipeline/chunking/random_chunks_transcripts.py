@@ -2,13 +2,18 @@ from pathlib import Path
 import pandas as pd
 import random
 import re
+from tqdm import tqdm
 
 # Paths
 BASE_DIR = Path("/ccn2/dataset/babyview/outputs_20250312")
-RANDOM_VIDEO_PATHS = "random_video_paths.csv"
+RANDOM_VIDEO_PATHS = "random_10s_video_paths_0604.csv"
+ALL_VIDEO_PATHS = "all_video_paths.csv"
 CHUNKS_DIR = BASE_DIR / "activities/chunks"
+ALREADY_CHUNKED = True
 TRANSCRIPTS_DIR = BASE_DIR / "transcripts/diarised"
-OUTPUT_CSV = "selected_chunk_transcripts_0508.csv"
+OUTPUT_CSV = "selected_chunk_transcripts_0604.csv"
+CHUNK_SIZE = 10
+VIDEOS_DIR = "/ccn2/dataset/babyview/unzip_2025/babyview_main_storage"
 
 def main():
     # Load video paths
@@ -18,31 +23,38 @@ def main():
     selected_chunk_ids = set()
     
     # Keep selecting until we have 100 unique chunks
-    while len(selected_chunks) < 1000:
+    for video_path in tqdm(video_paths):
+    #while len(selected_chunks) < 1000 and not ALREADY_CHUNKED:
         # Select random video
-        video_path = random.choice(video_paths)
-        videostem = Path(video_path).stem.removesuffix("_processed")
-        video_id = videostem.split('_')[0]
-        
-        # Find chunks for this video
-        chunk_dir = CHUNKS_DIR / Path(video_path).stem
-        if not chunk_dir.exists():
-            continue
-            
-        chunk_files = list(chunk_dir.glob("*.mp4"))
-        if not chunk_files:
-            continue
-            
-        # Select random chunk
-        chunk_file = random.choice(chunk_files)
-        chunk_id = int(re.search(r'(\d+)\.mp4$', chunk_file.name).group(1))
-        unique_chunk_id = chunk_file.parent.name + '/' + chunk_file.name
-        # Skip if we've already selected this chunk
-        if unique_chunk_id in selected_chunk_ids:
-            continue
+    #    if not ALREADY_CHUNKED:
+        #video_path = random.choice(video_paths)
+        videostem = Path(video_path).stem
+        videostem = re.sub(r'(_processed)?_\d+$', '', videostem)
+        subject_id = videostem.split('_')[0]
+        if ALREADY_CHUNKED:
+            chunk_file = video_path
+            video_path = Path(VIDEOS_DIR) / videostem / video_path
+            chunk_id = int(re.search(r'(\d+)\.mp4$', Path(chunk_file).name).group(1))
+        else:
+            # Find chunks for this video
+            chunk_dir = CHUNKS_DIR / Path(video_path).stem
+            if not chunk_dir.exists():
+                continue
+                
+            chunk_files = list(chunk_dir.glob("*.mp4"))
+            if not chunk_files:
+                continue
+                
+            # Select random chunk
+            chunk_file = random.choice(chunk_files)
+            chunk_id = int(re.search(r'(\d+)\.mp4$', chunk_file.name).group(1))
+            unique_chunk_id = chunk_file.parent.name + '/' + chunk_file.name
+            # Skip if we've already selected this chunk
+            if unique_chunk_id in selected_chunk_ids:
+                continue
             
         # Get transcript
-        transcript_path = TRANSCRIPTS_DIR / video_id / f"{videostem}.csv"
+        transcript_path = TRANSCRIPTS_DIR / subject_id / f"{videostem}.csv"
         if not transcript_path.exists():
             print(transcript_path)
             continue
@@ -52,8 +64,8 @@ def main():
             transcript_df = pd.read_csv(transcript_path)
             
             # Time range for this chunk
-            start_time = chunk_id * 60
-            end_time = start_time + 60
+            start_time = chunk_id * CHUNK_SIZE
+            end_time = start_time + CHUNK_SIZE
             def time_to_seconds(time_str):
                 if isinstance(time_str, str):
                     parts = time_str.split(':')
@@ -93,7 +105,7 @@ def main():
                 'chunk_end_time': end_time,
                 'transcript': transcript_text
             })
-            selected_chunk_ids.add(unique_chunk_id)
+            #selected_chunk_ids.add(unique_chunk_id)
             
         except Exception as e:
             print(f"Error processing {transcript_path}: {e}")

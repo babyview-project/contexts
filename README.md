@@ -19,12 +19,12 @@ Set username and password in your `.env` file
 
 Run locally:
 ```
-cd src/annotations
+cd src/gallery
 python app.py
 ```
 
 Run static website
 ```
-cd src/annotations
+cd src/gallery
 gunicorn -w 4 app:app --bind 0.0.0.0:<PORT>
 ```

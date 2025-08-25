@@ -4,6 +4,7 @@ from collections.abc import Sequence
 import pandas as pd
 import os
 import math
+import time
 from vllm.model_executor.guided_decoding.outlines_logits_processors import RegexLogitsProcessor
 import argparse
 from tqdm import tqdm
@@ -20,15 +21,15 @@ from vllm.lora.request import LoRARequest
 from pathlib import Path
 
 activities = ['being held',  'eating',  'drinking',  'playing with toy',  'getting changed',  'crawling',  'crying',  'exploring',  'cooking',  'cleaning',  'gardening',  'watching tv',  'driving',  'reading',  'looking at device', 'dancing', 'music time', 'nothing', 'nursing']
-locations = ["bathroom", "bedroom", "car", "closet", "garage", "living room", "hallway", "outside", "garage", "kitchen", "deck"]
-
+locations = ["A: bathroom", "B: bedroom", "C: car", "D: closet", "E: garage", "F: living room", "G: hallway", "H: outside", "I: garage", "J: kitchen", "K: deck"]
+location_map = {loc.split(":")[0].strip(): loc.split(":")[1].strip() for loc in locations}
 # PROMPTS
-base_location_prompt = f"Answer with one word what location this image is in from the following, taken with a camera attached to the head of a child: {", ".join(locations)}"
+base_location_prompt = f"Answer with one of the following letters what location this image is in from the following, taken with a camera attached to the head of a child: {", ".join(locations)}"
 base_activity_prompt = f"Answer with one word what activity is going on in this image from the following, taken with a camera attached to the head of a child: {", ".join(activities)}"
 
 # SAMPLING PARAMS
-sampling_nums = 5
-logprobs = 2
+sampling_nums = 1 #only setting to one since we are only generating single tokens which can be accounted for from log probs. Set higher if choices have more than one token which is even possible for words like 'hallway'
+logprobs = 10
 set_seed = 10
 
 class ModelRequestData(NamedTuple):
@@ -74,17 +75,22 @@ def get_file_list(source):
         file_list = [source]  # Single file case
     return file_list
 
-def run_internvl(questions: list[str], modality: str, num_devices=1) -> ModelRequestData:
+def run_internvl(questions: list[str], modality: str, num_devices=1, batch_size=32) -> ModelRequestData:
     assert modality == "image"
-    model_name = "OpenGVLab/InternVL2_5-8B"
+    model_name = "OpenGVLab/InternVL2_5-8B" #"OpenGVLab/InternVL3-2B" #"OpenGVLab/InternVL2_5-4B" 
     attention_heads = 32
-    print(largest_factor_less_than(num_devices, attention_heads))
+    #    max_num_batched_tokens=16384,
     engine_args = EngineArgs(
         model=model_name,
         trust_remote_code=True,
-        max_model_len=2048,
+        gpu_memory_utilization=0.96,
+        max_model_len=880,
         limit_mm_per_prompt={modality: 1},
-        tensor_parallel_size=largest_factor_less_than(num_devices, attention_heads)
+        tensor_parallel_size=largest_factor_less_than(num_devices, attention_heads),
+        enable_prefix_caching=True,
+        max_num_seqs=batch_size,
+        dtype="float16",
+        enforce_eager=True
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name,
                                               trust_remote_code=True)
@@ -99,7 +105,7 @@ def run_internvl(questions: list[str], modality: str, num_devices=1) -> ModelReq
     # models variants may have different stop tokens
     # please refer to the model card for the correct "stop words":
     # https://huggingface.co/OpenGVLab/InternVL2-2B/blob/main/conversation.py
-    stop_tokens = ["<|endoftext|>", "<|im_start|>", "<|im_end|>", "<|end|>"]
+    stop_tokens = ["<|endoftext|>", "<|im_start|>", "<|im_end|>"]
     stop_token_ids = [tokenizer.convert_tokens_to_ids(i) for i in stop_tokens]
 
     return ModelRequestData(
@@ -108,15 +114,17 @@ def run_internvl(questions: list[str], modality: str, num_devices=1) -> ModelReq
         stop_token_ids=stop_token_ids,
     )
 
-def guided_decoding(choices):
+def guided_decoding(choices, labels=False):
+    if labels:
+        choices = [choice.split(":")[0] for choice in choices]
     guided_decoding_params = GuidedDecodingParams(choice=choices)
     choices_regex = "(" + "|".join(choices) + ")"
     return guided_decoding_params, choices_regex
 
 class ImageLocationsPredictor():
-    def __init__(self, num_devices=1):
+    def __init__(self, num_devices=1, batch_size=32):
         self.req_data = run_internvl([base_location_prompt,
-                            base_activity_prompt], "image", num_devices)
+                            base_activity_prompt], "image", num_devices, batch_size)
         default_limits = {"image": 0, "video": 0, "audio": 0}
         self.req_data.engine_args.limit_mm_per_prompt = default_limits | dict(
         self.req_data.engine_args.limit_mm_per_prompt or {})
@@ -133,8 +141,8 @@ class ImageLocationsPredictor():
     def create_sampling_params(self, guided_decoding_params, sampling_nums=sampling_nums, logprobs=logprobs):
         sampling_params = SamplingParams(
             n=sampling_nums,
-            temperature=1.4,
-            max_tokens=64,
+            temperature=1, # set higher if you are sampling multiple times
+            max_tokens=1,
             stop_token_ids=self.req_data.stop_token_ids,
             logprobs=logprobs
         )
@@ -142,31 +150,37 @@ class ImageLocationsPredictor():
         return sampling_params
 
     def create_all_sampling_params(self):
-        location_params, self.location_regex = guided_decoding(locations)
+        location_params, self.location_regex = guided_decoding(locations, labels=True)
         activity_params, self.activity_regex = guided_decoding(activities)
         self.activity_sampling_params = self.create_sampling_params(activity_params)
         self.location_sampling_params = self.create_sampling_params(location_params)
 
     def predict_locations_activities(self, images, args):
+        results = pd.DataFrame()
         if os.path.exists(args.output):
             df = pd.read_csv(args.output)
-            images = [image for image in images if image not in df["image_path"].values]
-        total_prompt_batches = math.ceil(len(images) / args.prompting_batch)
+            existing_paths = set(df["image_path"].values)
+            images = [image for image in images if image not in existing_paths]
+        images.sort()
+        image_objs = [PIL.Image.open(image).convert("RGB") for image in images]
+        total_prompt_batches = math.ceil(len(image_objs) / args.prompting_batch)
         for batch in tqdm(range(total_prompt_batches), desc="Retrieving probabilities for prompts", total=total_prompt_batches):
+            curr_image_objs = batcher(image_objs, batch+1, total_prompt_batches)
             curr_images = batcher(images, batch+1, total_prompt_batches)
             location_generations = self.llm.generate(prompts=[{
                 "prompt": self.location_prompt,
-                "multi_modal_data": {"image": PIL.Image.open(curr_image).convert("RGB")}
-                } for curr_image in curr_images], 
+                "multi_modal_data": {"image": img}
+                } for img in curr_image_objs], 
                 sampling_params=self.location_sampling_params, use_tqdm=False)
-            activity_generations = self.llm.generate(prompts=[{
-                "prompt": self.activity_prompt,
-                "multi_modal_data": {"image": PIL.Image.open(curr_image).convert("RGB")}
-                } for curr_image in curr_images], 
-                sampling_params=self.activity_sampling_params, use_tqdm=False)
-            current_batch = assign_top_label_and_probs(location_generations, curr_images, "location", self.location_regex)
-            current_batch = assign_top_label_and_probs(activity_generations, curr_images, "activity", self.activity_regex, current_batch=current_batch)  
-            update_csv_with_batch_results(current_batch, curr_images, args.output)
+            # Post-processing
+            current_batch = assign_top_label_and_probs(location_generations, curr_images, "location", self.location_regex, choices_map=location_map)
+            results = pd.concat([results, current_batch], ignore_index=True)
+            #current_batch = assign_top_label_and_probs(activity_generations, curr_images, "activity", self.activity_regex, current_batch=current_batch) 
+            #results.extend(current_batch) 
+        assert len(results) == len(images), f"Mismatch: results={len(results)} images={len(images)}"
+        results = pd.DataFrame(results)
+        update_csv_with_batch_results(results, images, args.output)
+        print(f"Processed video {args.output}")
         return len(images)
 
 def main():
@@ -177,7 +191,7 @@ def main():
     main_output_folder = args.output
     count = 0
     curr_goal = 1
-    predictor = ImageLocationsPredictor(args.num_devices)
+    predictor = ImageLocationsPredictor(args.num_devices, args.prompting_batch)
     if os.path.isdir(args.source):
         subdirs = [d for d in os.listdir(args.source) if os.path.isdir(os.path.join(args.source, d))]
         # If there are subdirectories assume that this means we want to save csv files at a video level/too much data to save a single CSV

@@ -173,6 +173,7 @@
     <div class="navigation">
         <a href="/" class="nav-button">Image Gallery</a>
         <a href="/videos" class="nav-button">Video Gallery</a>
+        <a href="/video_loader" class="nav-button">Video Loader</a>
     </div>
 
     {% if total_pages > 1 %}
@@ -211,8 +212,9 @@
             <select name="search_type" class="search-type">
                 <option value="all" {% if search_type == 'all' %}selected{% endif %}>All</option>
                 <option value="transcript" {% if search_type == 'transcript' %}selected{% endif %}>Transcript</option>
-                <option value="activity" {% if search_type == 'activity' %}selected{% endif %}>Activity (VQA)</option>
+                <option value="location" {% if search_type == 'location' %}selected{% endif %}>Location (LLM)</option>
                 <option value="activity_llm" {% if search_type == 'activity_llm' %}selected{% endif %}>Activity (LLM)</option>
+                <option value="video_path" {% if search_type == 'video_path' %}selected{% endif %}>Video path</option>
             </select>
             <button type="submit" class="search-button">Search</button>
         </form>

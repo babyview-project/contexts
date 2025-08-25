@@ -5,21 +5,23 @@ from dotenv import load_dotenv
 import os
 import pandas as pd
 import re
+from pathlib import Path
 import math
 
 # Load credentials from .env
 load_dotenv()
 USERNAME = os.getenv("APP_USERNAME")
 PASSWORD = os.getenv("APP_PASSWORD")
-
+PROJECT_PATH = os.getenv("PROJECT_PATH")
 app = Flask(__name__)
 
 VIDEO_DIR = "/"
+FULL_VIDEO_DIR = "/ccn2/dataset/babyview/unzip_2025/babyview_main_storage"
 IMAGE_DIR = "/"
 
 # Load data
-image_descriptions_raw = pd.read_csv("/home/tsepuri/activitycap/src/image_activities_locations.csv")
-video_descriptions_raw = pd.read_csv("/home/tsepuri/activitycap/src/video_activities_locations_all.csv")
+image_descriptions_raw = pd.read_csv(f"{PROJECT_PATH}/data/image_activities_locations.csv")
+video_descriptions_raw = pd.read_csv(f"{PROJECT_PATH}/data/full_video_activities_locations.csv") #"/home/tsepuri/activitycap/pipeline/data/video_activities_locations_all.csv"
 
 image_descriptions = {
     "image_path": image_descriptions_raw["image_path"],
@@ -35,21 +37,24 @@ image_descriptions = {
 
 video_descriptions = {
     "video_path": video_descriptions_raw["video_path"],
-    "location": video_descriptions_raw["location"],
-    "activity": video_descriptions_raw["activity_transcript"],
+    "location_llm": video_descriptions_raw["location_options"],
+    #"activity": video_descriptions_raw["activity_transcript"],
     "transcript": video_descriptions_raw["transcript"],
-    "activity_llm": video_descriptions_raw["text_options"],
+    "activity_llm": video_descriptions_raw["activity_options"],
     "text1": video_descriptions_raw["video_path"],
     "text": [
-        f"<b>Location from VQA: {loc}<br/>Activity from VQA: {act_transcript}<br/>" +
-        f"<br/>Activities from LLM: {text_options}<br/>LLM probabilities: {text_probs}</b>" +
+        f"<b>Locations from LLM: {loc_options}<br/>LLM probabilities: {loc_probs}" +
+        f"<br/>Activities from LLM: {act_options}<br/>LLM probabilities: {act_probs}" +
+        f"<br/>Location from VQA: {loc_vqa}<br/>Activity from VQA: {act_vqa}</b><br/>" +
         f"<br/><br/> Transcript: {transcript}"
-        for loc, act_transcript, transcript, text_options, text_probs in zip(
-            video_descriptions_raw["location"],
-            video_descriptions_raw["activity_transcript"],
+        for loc_vqa, act_vqa, transcript, loc_options, loc_probs, act_options, act_probs in zip(
+            video_descriptions_raw["location_vqa"],
+            video_descriptions_raw["activity_vqa"],
             video_descriptions_raw["transcript"],
-            video_descriptions_raw["text_options"],
-            video_descriptions_raw["text_probs"]
+            video_descriptions_raw["location_options"],
+            video_descriptions_raw["location_probs"],
+            video_descriptions_raw["activity_options"],
+            video_descriptions_raw["activity_options"]
         )
     ]
 }
@@ -80,6 +85,21 @@ def index():
     items = zip(image_descriptions["image_path"], image_descriptions["text"])
     return render_template("image_gallery.html", items=items)
 
+@app.route("/video_loader")
+def video_loader():
+    search_term = request.args.get("search", "")
+    video_path = search_term
+    video_found = False
+    if search_term:
+        video_path = Path(f"{FULL_VIDEO_DIR}/{search_term}/{search_term}_processed.MP4")
+        if os.path.exists(video_path):
+            video_found = True
+
+    return render_template("video_loader.html",
+                           search_term=search_term,
+                           video_path=video_path,
+                           video_found=video_found)
+
 @app.route("/videos")
 @requires_auth
 def videos():
@@ -95,10 +115,10 @@ def videos():
     if search_term:
         all_matched_items = []
         
-        for i, (path, loc, act, act_llm, transcript, text) in enumerate(zip(
+        for i, (path, loc, act_llm, transcript, text) in enumerate(zip(
             video_descriptions["video_path"],
-            video_descriptions["location"],
-            video_descriptions["activity"],
+            video_descriptions["location_llm"],
+            #video_descriptions["activity"],
             video_descriptions["activity_llm"],
             video_descriptions["transcript"],
             video_descriptions["text"]
@@ -117,9 +137,11 @@ def videos():
             
             if search_type == 'transcript' and safe_contains(transcript, search_term):
                 match = True
-            elif search_type == 'activity' and (safe_contains(act, search_term)):
+            elif search_type == 'location' and (safe_contains(loc, search_term)):
                 match = True
             elif search_type == "activity_llm" and (safe_contains(act_llm, search_term)):
+                match = True
+            elif search_type == "video_path" and (safe_contains(path, search_term)):
                 match = True
             elif search_type == 'all' and (safe_contains(text, search_term)):
                 match = True
@@ -179,7 +201,10 @@ def serve_image(filename):
 @app.route("/videos/<path:filename>")
 @requires_auth
 def serve_video(filename):
-    return send_from_directory(VIDEO_DIR, filename)
+    response = send_from_directory(VIDEO_DIR, filename)
+    response.headers.add('Cache-Control', 'public, max-age=3600')
+    response.headers.add('Accept-Ranges', 'bytes')
+    return response
 
 if __name__ == "__main__":
     app.run(debug=True)
