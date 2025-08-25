@@ -4,3 +4,6 @@
 **/*pycache
 .vscode/
 data/
+vis*/
+**/__pycache__/
+outputs/

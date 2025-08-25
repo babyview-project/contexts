@@ -1,0 +1,374 @@
+# Imports and helpers
+```{r}
+library(here)
+library(stringr)
+library(tidyverse)
+library(udpipe)
+library(spacyr)
+```
+
+```{r}
+spacy_install()
+spacy_download_langmodel("en_core_web_lg")
+spacy_finalize()
+spacy_initialize(model = "en_core_web_lg")
+ud_model <- udpipe_download_model(language = "english")
+ud_model <- udpipe_load_model(ud_model$file_model)
+
+
+unconstrained_objects <- read.csv(here("data/unconstrained_objects/unconstrained_objects.csv"))
+aoa_values <- read_csv(here("data/coef_data/eng_aoas.csv"))
+yoloe_objects_raw <- read.csv(here("data/overall_category_distribution.csv"))
+
+# Constants 
+colors_to_remove <- c("white", "green", "blue", "yellow", "red")
+excluded_words <- c("and", "of", "in", "on", "at", "'s")
+non_lemma <- c("glasses", "sled", "scissors", "leaves")
+more_exclusions <- c("two")
+```
+
+```{r}
+object_counts.bar <- function(df, input_n=50, input_title="Proportion of frames") {
+  sliced_df <- df |> slice_max(order_by = proportion, n = input_n)
+  coverage = round(sum(sliced_df$video_count)/sum(df$video_count) * 100, 2)
+  ggplot(df |> slice_max(order_by = proportion, n = input_n), aes(x = reorder(object, -proportion), y = proportion)) +
+  geom_col(fill = "lightblue") +
+  labs(
+    title = paste0(input_title, " (Coverage = ", coverage,"%)"),
+    x = "Object",
+    y = "Proportion of frames"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+# Helper function to filter tokens
+filter_based_on_pos <- function(lemma, upos) {
+  !is.na(lemma) & !(lemma %in% colors_to_remove) & (!(upos %in% c("ADJ", "DET")) | (lemma %in% adjectives_to_keep))
+}
+```
+
+# Cleaning data
+```{r}
+# Read and clean data
+unconstrained_objects_clean <- unconstrained_objects |>
+  mutate(objects = str_split(objects, ",")) |>
+  unnest(objects) |>
+  mutate(objects = objects |>
+           str_trim() |>
+           str_to_lower() |>
+           str_remove("^(a|an|the|and)\\s+") |>
+           str_remove_all("\\.")
+  ) |>
+  mutate(objects = case_when(
+    objects == "counter top" ~ "countertop",
+    objects == "barbecue" ~ "barbeque",
+    TRUE ~ objects
+  )) |>
+  filter(str_count(objects, "\\S+") <= 4)
+
+# Process unique objects with annotations
+object_annotations <- unconstrained_objects_clean |>
+  distinct(objects) |>
+  rowwise() |>
+  mutate(
+    parsed = list(spacy_parse(objects, lemma = TRUE, pos = TRUE)),
+    parsed = list(parsed |> mutate(lemma = if_else(token %in% non_lemma, token, lemma))),
+    keep_tokens = list(filter_based_on_pos(parsed$lemma, parsed$pos)),
+    cleaned_lemma = paste(parsed$lemma[keep_tokens], collapse = " ") |> str_remove("^and\\s+"),
+    cleaned_pos_tags = paste(parsed$pos[keep_tokens], collapse = " "),
+    removed_adj = list(parsed$lemma[(parsed$pos == "ADJ" & !(parsed$lemma %in% adjectives_to_keep)) | parsed$lemma %in% colors_to_remove])
+  ) |>
+  select(objects, cleaned_lemma, cleaned_pos_tags, removed_adj)
+
+# Get removed adjectives counts
+removed_adjectives <- object_annotations |>
+  mutate(
+    removed_adj = list(lapply(removed_adj, function(x) {
+      x <- str_trim(x)       # remove leading/trailing spaces
+      x[nzchar(x)]           # remove empty strings
+    }))
+  ) |>
+  unnest(removed_adj) |>
+  filter(removed_adj != "") |>
+  left_join(count(unconstrained_objects_clean, objects), by = "objects") |>
+  count(removed_adj, wt = n, name = "adj_video_count") |>
+  mutate(adj_frame_count = adj_video_count * 10) |>
+  arrange(desc(adj_video_count))
+```
+
+```{r}
+# Final counts
+total_frames <- nrow(unconstrained_objects) * 10
+object_counts <- unconstrained_objects_clean |>
+  count(objects) |>
+  left_join(select(object_annotations, objects, cleaned_lemma), by = "objects") |>
+  count(cleaned_lemma, wt = n, name = "video_count") |>
+  filter(video_count > 1 & cleaned_lemma != "") |>
+  mutate(frame_count = video_count * 10, proportion = frame_count / total_frames)  
+```
+
+How many clips did we miss because of our filtering
+```{r}
+length(unique(unconstrained_objects_clean$video_id))
+length(unique(unconstrained_objects$video_id))
+```
+Only 8 videos nice.
+
+# Proportion plotting
+
+Number of objects.
+```{r}
+nrow(object_counts)
+```
+
+## Main proportion plot
+Top 50 by default.
+```{r}
+object_counts.bar(object_counts |> rename(object = cleaned_lemma), input_title="Proportion of Frames with Each Object")
+write.csv(object_counts, here("data/unconstrained_objects/vqa_object_counts.csv"))
+```
+## Multiple words
+```{r}
+object_counts.bar(object_counts |> rename(object = cleaned_lemma) |> filter(grepl(" ", object)), input_title="Proportion of Frames with Each Object", input_n=30)
+```
+
+## Types of toys
+```{r}
+toys <- object_counts |>
+  filter(grepl("^(toy)", cleaned_lemma)) |>
+  mutate(toy_name = ifelse(cleaned_lemma == "toy", cleaned_lemma, gsub("toy ", "", cleaned_lemma)))
+
+object_counts.bar(toys |> filter(cleaned_lemma != "toy") |> rename(object = toy_name), input_title="Proportion of toy names")
+```
+
+## Just words
+```{r}
+word_counts <- object_counts |>
+  mutate(word = str_split(cleaned_lemma, " ")) |>
+  unnest(word) |>
+  filter(!(word %in% excluded_words)) |>
+  group_by(word) |>
+  summarize(proportion = sum(frame_count)/total_frames, video_count=sum(video_count))
+
+object_counts.bar(word_counts |> rename(object = word), input_title="Proportion of words")
+```
+
+## What color are things?
+```{r}
+ggplot(removed_adjectives |> mutate(removed_adj = as.character(removed_adj)), aes(x = reorder(removed_adj, -adj_video_count), y = adj_video_count)) +
+  geom_bar(stat = "identity") +
+  xlab("Removed Adjective") +
+  ylab("Video Count") +
+  ggtitle("Removed Adjectives Ordered by Video Count") +
+    theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+```
+# YOLOe comparisons
+
+Some YOLOe cleaning
+```{r}
+yoloe_objects <- yoloe_objects_raw |>
+  filter(!is.na(class_name)) |>
+  distinct(class_name, .keep_all=TRUE) |>
+  mutate(
+    parsed = map(class_name, ~ spacy_parse(.x, lemma = TRUE, pos = TRUE)),
+    parsed = map(parsed, ~ mutate(.x,
+      lemma = if_else(token %in% non_lemma & lemma != token, token, lemma)
+    )),
+    class_name = map_chr(parsed, ~ paste(.x$lemma, collapse = " ")),
+    class_name = case_when(class_name == "teddybear" ~ "teddy bear",
+                          TRUE ~ class_name)
+  ) |>
+  select(-parsed)
+```
+
+## most important missing words
+```{r}
+non_yoloe_word_counts <- object_counts |>
+  filter(!(cleaned_lemma %in% yoloe_objects$class_name)) 
+
+object_counts.bar(non_yoloe_word_counts |> rename(object = cleaned_lemma), input_title="Objects not in YOLOe but in VQA")
+```
+
+### CDI only
+```{r}
+aoa_words <- aoa_values |> 
+  mutate(item_definition = item_definition |>
+           str_to_lower() |>
+           str_replace_all("\\s*\\([^\\)]+\\)", "")) |>
+  distinct(item_definition) |>
+  pull(item_definition)
+object_counts.bar(non_yoloe_word_counts |> rename(object = cleaned_lemma) |> filter(object %in% aoa_words), input_title="Objects not in YOLOe but in CDI and in VQA")
+```
+
+## missing YOLOe words
+```{r}
+yoloe_and_vqa <- object_counts |> inner_join(yoloe_objects |> distinct(class_name, .keep_all=TRUE) |> rename(yoloe_proportion = proportion), by=c("cleaned_lemma"="class_name"))
+yoloe_only_words <- yoloe_objects |> anti_join(yoloe_and_vqa, by=c("class_name"="cleaned_lemma")) |> rename(object=class_name)
+object_counts.bar(yoloe_only_words, input_title = "Words in YOLOe but not VQA")
+```
+Some of these are missing because of our lemmatization, for example 'block' vs 'blocks'
+
+## biggest YOLOe disconnects
+```{r}
+model <- lm(log(yoloe_proportion) ~ log(proportion), data = yoloe_and_vqa)
+
+# Add residuals and identify outliers (e.g., top 5% residuals)
+yoloe_and_vqa_labeled <- yoloe_and_vqa %>%
+  mutate(
+    log_prop = log(proportion),
+    log_yoloe = log(yoloe_proportion),
+    resid = abs(residuals(model)),
+    is_outlier = resid > quantile(resid, 0.85)
+  )
+
+# Plot
+ggplot(yoloe_and_vqa_labeled, aes(x = log_prop, y = log_yoloe)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  ggrepel::geom_label_repel(
+    data = filter(yoloe_and_vqa_labeled, is_outlier),
+    size = 3,
+    aes(label=cleaned_lemma),
+    max.overlaps = 20,
+    box.padding = 0.4,
+    point.padding = 0.3
+  ) +
+  ylab("YOLOe proportion") +
+  xlab("VQA proportion") +
+  labs(title=paste(nrow(yoloe_and_vqa_labeled), "objects")) +
+  ggpubr::stat_cor()
+```
+
+# Hierarchical clustering
+```{r}
+vqa_objects <- object_counts |>
+  left_join(select(yoloe_and_vqa_labeled, cleaned_lemma, log_prop, log_yoloe),
+            by = "cleaned_lemma") |>
+  mutate(
+    source = if_else(!is.na(log_yoloe), "vqa_yoloe", "vqa"),
+    log_prop = if_else(!is.na(log_yoloe), 
+                       rowMeans(cbind(log_prop, log_yoloe), na.rm = TRUE),
+                       log(proportion))
+  ) |>
+  transmute(object = cleaned_lemma, source, log_prop)
+# Combine and write to CSV
+all_objects <- bind_rows(vqa_objects, yoloe_only_words |> transmute(source="yoloe", object, log_prop = log(proportion))) |> mutate(in_cdi = object %in% aoa_words)
+
+# Write to file
+write.csv(all_objects, here("data/unconstrained_objects/all_objects.csv"), row.names = FALSE)
+```
+
+Importing wordnet data
+```{r}
+library(tidyverse)
+library(igraph)
+library(jsonlite)
+
+# --- Step 1: Load JSON relations ---
+relations <- fromJSON(here("data/unconstrained_objects/wordnet.json"))$links %>% as_tibble()
+wordmap <- read.csv(here("data/unconstrained_objects/wordnet_word_map.csv")) 
+g <- graph_from_data_frame(relations, directed = TRUE)
+
+# --- Get root nodes ---
+root_nodes <- setdiff(relations$source, relations$target)
+
+# --- Get minimum distance from any root to all nodes ---
+all_nodes <- V(g)$name
+distances_df <- map_dfr(root_nodes, function(root) {
+  sp <- distances(g, v = root, to = all_nodes)
+  tibble(target = colnames(sp), distance = as.numeric(sp))
+}) %>%
+  group_by(target) %>%
+  summarise(min_distance = min(distance, na.rm = TRUE), .groups = "drop")
+
+# --- Compute number of direct children for each node ---
+direct_children_df <- tibble(
+  target = V(g)$name,
+  num_direct_children = degree(g, mode = "out")
+)
+
+# --- Compute direct parent (take the first one if multiple) ---
+direct_parents_df <- tibble(
+  target = V(g)$name,
+  direct_parent = map_chr(V(g)$name, function(node) {
+    parents <- neighbors(g, node, mode = "in")$name
+    if (length(parents) > 0) parents[1] else NA_character_
+  })
+)
+
+# --- Annotate ---
+syn_to_word <- function(target) {
+  return(word(str_replace(target, "_", " "), 1, sep = fixed(".")))
+}
+  
+annotated <- distances_df %>%
+  mutate(cleaned_target = syn_to_word(target)) %>%
+  left_join(wordmap |> transmute(target=X1, object=str_replace(X0, "_", " "))) |> 
+  left_join(all_objects, by = c("object")) %>%
+  distinct(object, .keep_all = TRUE) %>%
+  left_join(direct_children_df, by = "target") %>%
+  left_join(direct_parents_df, by = "target")
+
+# --- Final summary: group by distance and aggregate ---
+summary_df <- annotated %>%
+  group_by(min_distance) %>%
+  summarise(
+    total_objects = n(),
+    proportion = exp(log_prop),
+    total_coverage = sum(proportion),
+    avg_num_direct_children = mean(num_direct_children),
+    .groups = "drop"
+  )
+
+# Plot
+ggplot(annotated, aes(x = min_distance, y = exp(log_prop))) +
+  geom_jitter(width = 0.1, height = 0, alpha = 0.4, color = "steelblue") +
+  geom_text(data = summary_df,
+            aes(x = min_distance, y = 0.3,
+                label = paste0("n=", total_objects)),
+            size = 3, vjust = 0) +
+  ggrepel::geom_label_repel(data=annotated |> filter(exp(log_prop) > 0.04), aes(label=object)) +
+  scale_x_continuous(breaks = summary_df$min_distance) +
+  labs(
+    x = "Degrees of Separation",
+    y = "Proportion of frames",
+    title = "Object Coverage by Graph Distance"
+  ) +
+  theme_minimal()
+
+```
+Ancestor chain for processing
+```{r}
+get_trimmed_path <- function(node, max_depth = 7) {
+  path <- character()
+  current <- node
+  while (TRUE) {
+    parents <- neighbors(g, current, mode = "in")$name
+    if (length(parents) == 0) break
+    current <- parents[1]
+    path <- c(current, path)
+  }
+  # Include the target node and remove generic nodes
+  path <- c(path, node)
+  path <- path[!path %in% c("entity.n.01")]
+  length_diff <- max_depth - length(path)
+  c(path, rep(NA, length_diff))[1:max_depth]
+}
+
+# Build condensed hierarchy table
+hierarchy_df <- tibble(target = V(g)$name) %>%
+  rowwise() %>%
+  mutate(path = list(get_trimmed_path(target))) %>%
+  unnest_wider(path, names_sep = "_") %>%
+  select(target, where(~ any(!is.na(.)))) |>
+  mutate(across(where(is.character) & !matches("^target$"), ~ word(str_replace(., "_", " "), 1, sep = fixed("."))))
+
+annotated <- annotated %>%
+  left_join(hierarchy_df, by = c("target"))
+
+all_objects_to_check <- bind_rows(annotated, (all_objects |> anti_join(annotated)))
+write.csv(all_objects_to_check, here("data/unconstrained_objects/all_objects_to_check.csv"))
+```
