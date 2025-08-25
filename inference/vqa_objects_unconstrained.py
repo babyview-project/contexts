@@ -1,7 +1,6 @@
 import pandas as pd
 from models.video.videochat_flash import VideoFlash
 from ray.experimental.tqdm_ray import tqdm
-#from models.image.internvl import InternVL
 import ray
 from datetime import datetime
 from pathlib import Path

@@ -3,15 +3,15 @@ This repository stores code to describe scenes, locations, and activities presen
 
 ## Running any Python code
 ```
-conda create --name activitycap python=3.12
-conda activate activitycap
+conda create --name contexts python=3.12
+conda activate contexts
 pip install -r requirements.txt
 ```
 
 ## Frame predictions
 ```
-cd src
-python image_locations_probs_parallel.py --device_ids [0,1,2,3,4,5,6,7] --num_parallel 2
+cd inference
+python frame_level.image_locations_probs_parallel.py --device_ids [0,1,2,3,4,5,6,7] --num_parallel 2
 ```
 
 ## Gallery running

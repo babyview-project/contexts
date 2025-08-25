@@ -1,6 +1,7 @@
 import re
 from re import escape as regex_escape
 from collections.abc import Sequence
+from constants import get_activities, get_locations
 import pandas as pd
 import math
 from vllm.model_executor.guided_decoding.outlines_logits_processors import RegexLogitsProcessor
@@ -12,8 +13,8 @@ import numpy as np
 from vllm import LLM, SamplingParams
 from vllm.sampling_params import GuidedDecodingParams
 
-activities = ['being held',  'eating',  'drinking',  'playing with toy',  'getting changed',  'crawling',  'crying',  'exploring',  'cooking',  'cleaning',  'gardening',  'watching tv',  'driving',  'reading', 'dancing', 'music time',  'looking at device', 'nothing', 'nursing', "walking", "playing with dishwasher", "playing with adult", 'clipping nails', 'brushing', 'sitting', 'looking', 'standing', 'drawing', 'holding toy', 'washing dishes', 'riding car']
-locations = ["bathroom", "bedroom", "car", "closet", "garage", "living room", "hallway", "outside", "kitchen", "deck", "staircase", "dining room", "classroom", "playroom", "cafeteria", "backyard", "basement", "playground", "nursery"]
+activities = get_activities()
+locations = get_locations()
 # singing
 first_word_to_activity = {}
 for activity in activities:
@@ -25,7 +26,7 @@ parser.add_argument("--batch", type=int, default=1, help="Batch number of total 
 parser.add_argument("--total_batches", type=int, default=1, help="Total batches being run in parallel.")
 parser.add_argument("--prompting_batch", type=int, default=1, help="How many prompts to pass into a single generate call")
 args = parser.parse_args()
-df = pd.read_csv("vid_activities_0.csv")
+df = pd.read_csv("vid_descriptions.csv")
 current_batch = batcher(df, args.batch, args.total_batches) 
 len(current_batch)
 activity_choices = [f"{regex_escape(str(choice))}" for choice in activities]

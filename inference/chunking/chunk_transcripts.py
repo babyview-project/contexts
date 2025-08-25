@@ -5,32 +5,29 @@ import re
 from tqdm import tqdm
 
 # Paths
+# TODO: change to script
 BASE_DIR = Path("/ccn2/dataset/babyview/outputs_20250312")
-RANDOM_VIDEO_PATHS = "random_10s_video_paths_0604.csv"
-ALL_VIDEO_PATHS = "all_video_paths.csv"
-CHUNKS_DIR = BASE_DIR / "activities/chunks"
+# csv file with column video_path
+VIDEO_PATHS = "video_paths.csv"
+CHUNKS_DIR = Path("/ccn2/dataset/babyview/unzip_2025_10s_videos_256p")
 ALREADY_CHUNKED = True
 TRANSCRIPTS_DIR = BASE_DIR / "transcripts/diarised"
-OUTPUT_CSV = "selected_chunk_transcripts_0604.csv"
+OUTPUT_CSV = "chunk_transcripts.csv"
 CHUNK_SIZE = 10
 VIDEOS_DIR = "/ccn2/dataset/babyview/unzip_2025/babyview_main_storage"
 
 def main():
     # Load video paths
-    video_paths = pd.read_csv(RANDOM_VIDEO_PATHS)['video_path'].tolist()
+    video_paths = pd.read_csv(VIDEO_PATHS)['video_path'].tolist()
     
     selected_chunks = []
     selected_chunk_ids = set()
     
-    # Keep selecting until we have 100 unique chunks
     for video_path in tqdm(video_paths):
-    #while len(selected_chunks) < 1000 and not ALREADY_CHUNKED:
-        # Select random video
-    #    if not ALREADY_CHUNKED:
-        #video_path = random.choice(video_paths)
         videostem = Path(video_path).stem
         videostem = re.sub(r'(_processed)?_\d+$', '', videostem)
         subject_id = videostem.split('_')[0]
+        # TODO: fix chunk path logic
         if ALREADY_CHUNKED:
             chunk_file = video_path
             video_path = Path(VIDEOS_DIR) / videostem / video_path

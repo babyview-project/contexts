@@ -5,7 +5,7 @@ import torch
 import random
 import shutil
 import ray
-from model import _set_seed, get_model_and_processor, get_model_response, convert_model_response_to_dict
+from inference.models.video.videollama import VideoLLaMA
 
 """
 cd /ccn2/u/khaiaw/Code/babyview-pose/object-detection/video-qa
@@ -13,7 +13,8 @@ python unconstrained_questions.py
 In-progress (!) code for using a VQA model to get unconstrained labels for categories from videos.
 """
 
-_set_seed(42)
+prompter = VideoLLaMA()
+prompter._set_seed(42)
 
 num_processes = 8
 
@@ -39,7 +40,6 @@ def create_question():
 
 @ray.remote(num_gpus=1)
 def get_model_responses_for_video_sublist(video_dir_sublist):
-    model, processor = get_model_and_processor()
     question = create_question()
     
     
@@ -66,8 +66,8 @@ def get_model_responses_for_video_sublist(video_dir_sublist):
                     if try_count > max_try_count:
                         print(f"Failed to get response after {max_try_count} tries, skipping video_dir: {video_dir}")
                         break
-                    response = get_model_response(model, processor, video_path, question)
-                    response_dict = convert_model_response_to_dict(response, key_list)
+                    response = prompter.get_model_response(prompter.model, prompter.processor, video_path, question)
+                    response_dict = prompter.convert_model_response_to_dict(response, key_list)
                 
                 if response_dict is None:
                     continue

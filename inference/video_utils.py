@@ -98,7 +98,6 @@ def softmax(logits):
     exps = np.exp(logits - np.max(logits))
     return exps / np.sum(exps)
 
-
 def update_csv_with_batch_results(current_batch, vid_paths, df_name="video_activities_locations_probs.csv", keypath="image_path"):
     """
     Update the main CSV file with results from the current batch
@@ -166,6 +165,7 @@ def assign_top_label_and_probs(generations, image_paths, label_type, choices_reg
             continue
 
         probs_softmax = softmax(np.array(probs_list))
+        # probability needs to be greater than 0.1 to include
         filtered = [(opt, round(prob, 2)) for opt, prob in zip(text_options_list, probs_softmax) if prob >= 0.1]
         filtered_text_options, filtered_probs = zip(*filtered) if filtered else ([], [])
 
@@ -224,4 +224,3 @@ def largest_factor_less_than(m, n):
         if n % i == 0:
             return i
     return None 
-
