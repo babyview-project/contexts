@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Union, Any
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
 def _set_seed(seed):
+    torch.cuda.manual_seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -40,12 +41,12 @@ class VQA:
                                         value_constraints: Optional[Dict[str, List[str]]] = None) -> Optional[Dict[str, str]]:
         if len(response) < 10:
             print(f"Response too short, skipping..., response: {response}")
+            time.sleep(5)  # brief pause to avoid rapid retries
             return None
         
-        lines = response.split('||')
+        lines = response.replace('\n', '||').split('||')
         lines = [line.strip() for line in lines if line.strip()]
         lines = [line.replace('<', '').replace('>', '') for line in lines]
-        print(f"raw response: {lines}")
         response_dict = {}
         for key in key_list:
             found = False
@@ -53,11 +54,11 @@ class VQA:
                 line_split = line.split(":")
                 if len(line_split) <= 1:
                     continue
-                answer = line_split[-1].strip()
+                answer = line_split[-1].split("/")[0].strip()
                 if len(answer) < 2:
                     continue
                 if line.startswith(key):
-                    if value_constraints and key in value_constraints:
+                    if value_constraints and key in value_constraints and value_constraints[key]:
                         if not any(val.lower() == answer.lower() for val in value_constraints[key]):
                             print(f"Invalid value for {key}: {answer}")
                             return None

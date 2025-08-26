@@ -1,9 +1,12 @@
 import logging
 import time
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoModel, AutoImageProcessor
-from vqa import VQA
+from models.video.vqa import VQA
 import torch
 class VideoLLaMA(VQA):
+    def __init__(self, model_name: str = "DAMO-NLP-SG/VideoLLaMA3-7B", device:str="cuda"):
+        super().__init__(model_name, device)
+
     def _setup_model(self) -> None:
         self.model = AutoModelForCausalLM.from_pretrained(
             self.model_name,

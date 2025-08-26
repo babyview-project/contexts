@@ -7,7 +7,7 @@ conversing,1,1,,1,,,
 crafting,(low freq),,,,1,,
 crawling,1,,1,1,,,
 crying,1,,1,1,,,
-dancing,(low freq / -> listening to music),,1,,1,,
+dancing,1,,1,,1,,
 drawing,1,,,1,1,,
 drinking,1,1,1,1,,,
 driving,(low freq),,1,,,,
@@ -21,15 +21,15 @@ holding,(-> playing),1,,,,,
 imitating,(-> conversing / playing),,,1,,,
 listening to music,(-> music),,,1,1,,
 looking,(unclear referent),1,,,,,
-looking at device,1,,1,,,,
+looking at device,1,,1,,,looking at digital device',
 lying down,1,,,1,,,
 moving,(too generic),1,,,,,"maybe ""walking"" or ""crawling?"""
-music,1,,1,,,suggested change to 'music time',
+music time,1,,1,,,suggested change to 'music time',
 nothing,(too generic),,1,,,,agree too generic
-nursing,1,,1,1,,,"unlikely with our current camera, more likely with saycam"
+nursing,1,,1,1,,still feels distinct enough from everything else that it doesn't hurt to include?,"unlikely with our current camera, more likely with saycam"
 opening,(too generic),1,,,,,
 other person talking,(-> conversing),,,,1,,
-overhearing speech,1,,,1,1,unclear how a vqa model would pick this up without prompting with a transcript?,yeah I don't know...
+overhearing speech,(hard to annotate),,,1,1,unclear how a vqa model would pick this up without prompting with a transcript?,yeah I don't know...
 painting,(-> drawing),,,1,,,maybe painting or drawing?
 picking,(unclear referent),1,,,,,
 playing music,(-> music),,,1,1,,add in dancing?
@@ -37,9 +37,9 @@ playing,1,1,,,,,
 playing with object,(-> playing),1,1,,1,,
 playing without object,(-> playing),,,,1,,
 preparing for outing,(-> getting dressed),,,1,,,
-pretend play,(-> playing),,,,1,,I would keep pretend play as it's own thing
+pretend play,0,,,,1,,I would keep pretend play as it's own thing
 reading,1,1,1,1,1,,
-riding,(unclear referent),1,,,,,riding bike maybe>?
+riding bike,(low freq),1,,,,low freq?,riding bike maybe>?
 running,(low freq),,,1,,,ha might depend on the kid
 singing/humming,(-> music),,,,1,,
 sitting,1,1,,1,,"I think it would be hard for our model to characterize the difference between sitting and standing and lying down, I wonder if 'nothing' would be a better category to encapsulate those",
@@ -49,4 +49,5 @@ tidying,(-> cleaning),,,1,,,hm I think tidying isn't bad because kids don't use 
 walking,1,1,,1,,,
 washing,(-> cleaning),1,,,,,
 watching,(-> looking at device),1,1,1,1,,
+watching tv,1,,,,,,
 other,1,,,,,,
