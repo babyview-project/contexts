@@ -8,6 +8,11 @@ conda activate contexts
 pip install -r requirements.txt
 ```
 
+## Video level predictions
+```
+python constrained_contexts.py --output_path /ccn2/dataset/babyview/outputs_20250312/activities
+```
+
 ## Frame predictions
 ```
 cd inference

@@ -13,6 +13,19 @@ def get_original_locations():
 def get_original_activities():
     return ["being held", "eating", "drinking", "playing with toy", "getting changed", "crawling", "crying"]
 
+def get_multiword_links():
+    return {
+        "watching": "watching tv",
+        "living": "living room",
+        "storage": "storage room",
+        "looking": "looking at device",
+        "dining": "dining room",
+        "music": "music time",
+        "laundry": "laundry room",
+        "stair": "stairway",
+        "hall": "hallway"
+    }
+
 def get_bv_main_ids():
     # filtering to BV-main videos only
     video_df = pd.read_csv("../data/all_videos.csv")

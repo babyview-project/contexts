@@ -6,7 +6,7 @@ import random
 import shutil
 import ray
 import re
-from models.video.videollama import VideoLLaMA
+from models.video.videollama_constrained import VideoLLaMA
 from models.video.vqa import _set_seed
 from constants import get_activities, get_locations, get_bv_main_ids
 import argparse
@@ -43,7 +43,7 @@ def create_question():
 @ray.remote(num_gpus=1)
 def get_model_responses_for_video_sublist(video_dir_sublist, chunk_id, out_vis_dir, side_by_side_vis_dir, overwrite):
     question = create_question()
-    prompter = VideoLLaMA()
+    prompter = VideoLLaMA(use_constrained_decoding=True)
     
     # Use chunk_id for better progress tracking
     pbar_dirs = tqdm(enumerate(video_dir_sublist), 
@@ -87,12 +87,14 @@ def get_model_responses_for_video_sublist(video_dir_sublist, chunk_id, out_vis_d
                     try_count += 1
                     if try_count > 1:
                         # changing question slightly to see if that helps the model process the prompt differently 
-                        question = " " + question
+                        question = question
                     if try_count > max_try_count:
                         print(f"Failed to get response after {max_try_count} tries, skipping video: {video_path}")
                         break
-                    response = prompter.get_response(video_path, question)
+                    response = prompter.get_response_with_constraints(video_path, question, prompt_key_values)
                     response_dict = prompter.convert_model_response_to_dict(response, list(prompt_key_values.keys()), prompt_key_values)
+                    #response = prompter.get_response(video_path, question)
+                    #response_dict = prompter.convert_model_response_to_dict(response, list(prompt_key_values.keys()), prompt_key_values)
                 
                 # adding an empty dict if no response generated
                 if response_dict is None:

@@ -6,6 +6,7 @@ import shutil
 import ray
 import time
 from typing import Dict, List, Optional, Union, Any
+from constants import get_multiword_links
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
@@ -41,9 +42,11 @@ class VQA:
                                         value_constraints: Optional[Dict[str, List[str]]] = None) -> Optional[Dict[str, str]]:
         if len(response) < 10:
             print(f"Response too short, skipping..., response: {response}")
-            time.sleep(5)  # brief pause to avoid rapid retries
             return None
-        
+        if len(response) > 550:
+            print(f"Response too long, skipping..., response: {response}")
+            return None
+
         lines = response.replace('\n', '||').split('||')
         lines = [line.strip() for line in lines if line.strip()]
         lines = [line.replace('<', '').replace('>', '') for line in lines]
@@ -59,6 +62,10 @@ class VQA:
                     continue
                 if line.startswith(key):
                     if value_constraints and key in value_constraints and value_constraints[key]:
+                        multiword_links = get_multiword_links()
+                        if answer.lower() in multiword_links:
+                            answer = multiword_links[answer.lower()] 
+                            print(answer)
                         if not any(val.lower() == answer.lower() for val in value_constraints[key]):
                             print(f"Invalid value for {key}: {answer}")
                             return None
