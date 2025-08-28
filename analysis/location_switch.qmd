@@ -1,0 +1,520 @@
+```{r}
+library(tidyverse)
+library(glue)
+library(here)
+library(lmerTest)
+```
+
+# Data import
+```{r}
+recordings <- read_csv(here("data/recordings_proceessed.csv")) |> select(-start_time)
+all_locations_avg <- read_csv(here("data/all_contexts_cleaned.csv")) |>
+  mutate(location = Location) |>
+  rowwise() |>
+  mutate(frame_num = list(seq(start_time, end_time))) |>
+  unnest(frame_num)
+```
+# Constants and helpers
+Setting a minimum number of continuous frames to count a location as a 'stable' location. 10 frames = 10 seconds.
+```{r}
+LOCATION_LENGTH <- 30
+
+avg_age <- function(df) {
+  df |> mutate(age_avg = str_extract_all(age_bin, "\\d+") %>% 
+      lapply(as.numeric) %>% 
+      sapply(function(x) mean(x)))
+}
+
+bin_age <- function(df) {
+  df |> mutate(age_bin = case_when(
+    age < 12*30 ~ "5-12",
+    age < 18*30 ~ "12-18",
+    age < 24*30 ~ "18-24",
+    age < 30*30 ~ "24-30",
+    age < 36*30 ~ "30-36")) |> group_by(age_bin, subject_id) |> filter(!is.na(age_bin)) |>
+  mutate(total_count = n(), 
+         age_bin = factor(age_bin, levels = c("5-12", "12-18", "18-24", "24-30", "30-36")))
+}
+
+weighted_ci_normal_df <- function(df, value_col, weight_col, group_col = NULL, conf_level = 0.95) {
+  z <- qnorm(1 - (1 - conf_level) / 2)
+  
+  # Group if needed, otherwise treat as single group
+  if (!is.null(group_col)) {
+    df <- df %>% group_by(.data[[group_col]])
+  }
+  
+  df %>%
+    summarise(
+      weighted_mean = weighted.mean(.data[[value_col]], .data[[weight_col]], na.rm = TRUE),
+      w_var = sum(.data[[weight_col]] * (.data[[value_col]] - weighted_mean)^2, na.rm = TRUE) / sum(.data[[weight_col]], na.rm = TRUE),
+      w_se = sqrt(w_var / n()),
+      ci_lower = weighted_mean - z * w_se,
+      ci_upper = weighted_mean + z * w_se,
+      n_group = n(),
+      .groups = 'drop'
+    )
+}
+
+summarized_data <- function(data, x_var, y_var, group_var) {
+  return(data %>%
+           group_by_at(c(x_var, group_var)) %>%
+           summarise(mean_value = mean(.data[[y_var]], na.rm = TRUE),
+                     sd_value = sd(.data[[y_var]], na.rm = TRUE),
+                     n = n(),
+                     se = sd_value / sqrt(n()),
+                     ci_lower = mean_value - qt(1 - (0.05 / 2), n - 1) * se,
+                     ci_upper = mean_value + qt(1 - (0.05 / 2), n - 1) * se,
+                     .groups = 'drop')
+  )
+}
+
+plot_subject_breakdown <- function(df, subject_df, x_var, y_var, group, input_title, x_lab, y_lab, use_size = TRUE, use_line=TRUE) {
+  p <- ggplot(data = df, aes(x = .data[[x_var]], y = weighted_mean, group = 1))
+  
+  if (use_size && "total_hours" %in% names(subject_df)) {
+    p <- p + geom_jitter(
+      data = subject_df,
+      aes(x = .data[[x_var]], y = .data[[y_var]], color = .data[[group]], size = total_hours),
+      width = 0.1, height = 0, alpha = 0.5
+    )
+  } else {
+    p <- p + geom_jitter(
+      data = subject_df,
+      aes(x = .data[[x_var]], y = .data[[y_var]], color = .data[[group]]),
+      width = 0.1, height = 0, alpha = 0.5
+    )
+  }
+  
+  if (use_line) {
+    p <- p + geom_line()
+  }
+  
+  p  +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.1) +
+    labs(
+      title = input_title,
+      x = x_lab,
+      y = y_lab
+    ) +
+    theme_minimal() +
+    guides(color = "none")
+}
+```
+
+# Location switches
+```{r}
+locations_age <- all_locations_avg |>
+   left_join(recordings) |>
+  filter(!is.na(location)) |>
+  bin_age() |>
+  rename(total_frame_count = total_count)
+```
+
+## prop of locations across age
+```{r}
+num_hours_loc_age <- locations_age |>
+  group_by(subject_id, location, age_bin) |>
+  summarize(total_hours = n()/3600, .groups = "drop")
+
+location_props <- locations_age |>
+  ungroup() |>
+  summarize(prop = n() / first(total_frame_count), .by = c(subject_id, age_bin, location))
+
+location_summary <- location_props |>
+  left_join(num_hours_loc_age, by = c("subject_id", "location", "age_bin")) |>
+  group_by(age_bin, location) |>
+  group_modify(~ weighted_ci_normal_df(
+    .x,
+    value_col = "prop",
+    weight_col = "total_hours",
+    group_col = NULL
+  )) |>
+  ungroup()
+
+ggplot(location_summary, aes(x = age_bin, y = weighted_mean, color = location)) +
+  geom_smooth(method="lm", aes(group = location),
+    alpha = 0.5, se=FALSE) +
+    geom_point(position = position_dodge(width = 0.3)) +
+  geom_errorbar(
+    aes(ymin = ci_lower, ymax = ci_upper),
+    position = position_dodge(width = 0.3),
+    width = 0.2
+  ) +
+  labs(
+    x = "Age Bin",
+    y = "Proportion",
+    color = "Location",
+    title = "Location Proportions Across Age Bins"
+  ) +
+  theme_minimal()
+```
+
+## Cleaning data
+
+### Getting location run lengths
+Getting the lengths for every stable location span. This is really important for frame detections since location switches are very frequent. Noting that the location in a given frame is already smoothed using probabilities of sliding window of size 5.
+```{r}
+rle_id <- function(x) {
+  with(rle(x), rep(seq_along(lengths), lengths))
+}
+
+loc_lengths <- locations_age |>
+arrange(superseded_gcp_name_feb25, frame_num) |>
+  group_by(superseded_gcp_name_feb25) |>
+  mutate(location_run = rle_id(location), video_frame_count = n()) |>
+  group_by(superseded_gcp_name_feb25, location_run, .add = TRUE) |>
+  mutate(run_length = n()) |>
+  ungroup() |>
+  group_by(
+    superseded_gcp_name_feb25,
+    location_run,
+    age_bin,
+    run_length,
+    subject_id,
+    location, 
+    total_frame_count,
+    video_frame_count
+  ) |>
+  summarize(lowest_frame_num = min(frame_num), .groups = "drop")
+```
+
+Sanity checking
+```{r}
+check_df <- loc_lengths %>%
+  distinct(subject_id, age_bin, video_frame_count, superseded_gcp_name_feb25, total_frame_count) %>%
+  group_by(subject_id, age_bin) %>%
+  summarize(
+    sum_video_frame_count = sum(video_frame_count),
+    total_frame_count = first(total_frame_count),  # constant per group
+    .groups = "drop"
+  ) %>%
+  mutate(match = sum_video_frame_count == total_frame_count)
+stopifnot(all(check_df$match))
+```
+
+```{r}
+loc_participant_hours <- locations_age |>
+  group_by(subject_id, location) |>
+  summarize(total_hours = n()/3600, .groups = "drop")
+
+loc_lengths_by_subject <- summarized_data(loc_lengths, x_var="location", y_var="run_length", group_var="subject_id")
+loc_lengths_summarized <- summarized_data(loc_lengths, x_var="location", y_var="run_length", group_var = "location") |> rename(weighted_mean = mean_value)
+
+plot_subject_breakdown(loc_lengths_summarized, loc_lengths_by_subject |> filter(mean_value < 400), x_var = "location", y_var = "mean_value", group="subject_id", input_title="Avg location length (points represent individual subjects)", x_lab="Location", y_lab = "Avg seconds", use_size=FALSE, use_line=FALSE)
+
+loc_lengths_capped <- loc_lengths %>%
+  mutate(run_length_capped = ifelse(run_length > 100, 100, run_length))
+
+ggplot(loc_lengths_capped, aes(x = run_length_capped)) +
+  geom_histogram(bins = 20, fill = "skyblue", color = "black") +
+  scale_x_continuous(breaks = seq(0, 100, by = 5)) +
+  labs(
+    title = "Histogram of Location Run Lengths (Capped at 100 seconds)",
+    x = "Seconds",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+
+### Getting locatin switch info
+```{r}
+loc_switches_raw <- loc_lengths |>
+  group_by(superseded_gcp_name_feb25) |>
+  arrange(location_run) |>
+  mutate(
+    prior_location = lag(location),
+    prior_run_length = lag(run_length),
+    curr_run_length = run_length
+  ) |>
+  filter(location != prior_location) |>
+  transmute(
+    superseded_gcp_name_feb25,
+    frame_num=lowest_frame_num,
+    prior_location,
+    video_frame_count,
+    total_frame_count,
+    age_bin,
+    curr_location = location,
+    num_previous = prior_run_length,
+    num_future = curr_run_length,
+    subject_id,
+    unique_pair = glue("{pmin(prior_location, curr_location)}_{pmax(prior_location, curr_location)}")
+  ) |> ungroup()
+```
+
+```{r}
+# filtering out outlier numbers to make a cleaner plot
+ggplot(loc_switches_raw |> filter(num_previous < 250 & num_future < 250), aes(x=num_previous, y=num_future, color=curr_location)) +
+  geom_jitter(alpha=0.3) +
+  xlab("Number of seconds in previous location") +
+  ylab("Number of seconds in new location") +
+  labs(title="Location switches")
+```
+
+
+```{r}
+loc_switches_plot_by_subject <- function(loc_switches, title="Location switches across age", y="Proportion of location switches") {
+  num_loc_switches <- loc_switches |>
+  summarize(prop = n()/first(num_distinct_locations), .by=c(age_bin, subject_id)) |>
+    group_by(subject_id) |>
+    filter(n() > 1) |>
+    ungroup() 
+  
+  ggplot(num_loc_switches, aes(x = age_bin, y = prop, group =subject_id, color=subject_id)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    title = title,
+    x = "Age Bin (months)",
+    y = y
+  ) +
+  theme_minimal() +
+  guides(color="none")
+}
+```
+
+### Stabilizing locations to be a mininum continuous length
+Setting a minimum number of continuous frames to count a location as a 'stable' location. 10 frames = 10 seconds. Location switches only count if the child was in the previous location and the new location for at least x seconds. Locations are counted as distinct locations with switching opportunities (the denominator of our proportion calculation) if the child is in that location for at least 10 seconds.
+```{r}
+stable_loc_counts <- loc_lengths |>
+   filter(run_length >= LOCATION_LENGTH)
+
+stable_video_counts <- loc_lengths |>
+  group_by(superseded_gcp_name_feb25) |>
+  filter(all(run_length >= LOCATION_LENGTH))
+
+stable_loc_hours <- stable_loc_counts |>
+  group_by(age_bin, subject_id, location) |>
+  summarize(total_hours = sum(run_length)/3600, .groups="drop")
+
+stable_loc_counts_by_age <- stable_loc_counts |>
+  group_by(age_bin) |>
+  summarise(num_distinct_locations = n(), avg_location_length = mean(run_length), .groups = "drop")
+
+stable_loc_counts_by_participant <- stable_loc_counts |>
+  group_by(age_bin, subject_id) |>
+  summarise(num_distinct_locations = n(), avg_location_length = mean(run_length), .groups = "drop")
+
+stable_switches_raw <- loc_switches_raw |> filter(num_previous >= LOCATION_LENGTH & num_future >= LOCATION_LENGTH) |> ungroup()
+```
+
+How much data did we lose?
+```{r}
+paste("Total number of frames:",sum(loc_lengths$run_length))
+paste0("Stabilized frames (continuous frames>", LOCATION_LENGTH, "): ", sum(stable_loc_counts$run_length))
+# not using stable_video_counts, just using stabilized frames
+paste0("Stabilized frames from videos with only stable frames (continuous frames>", LOCATION_LENGTH, "): ", sum(stable_video_counts$run_length))
+paste0("Number of stable location switches: ", nrow(stable_switches_raw), " and number of total location switches: ", nrow(loc_switches_raw))
+```
+Just using stabilized frames
+
+## Quick descriptive plots
+```{r}
+loc_switches_raw_by_video <- stable_switches_raw |> ungroup() |> summarize(
+    n = n(),
+    location = names(which.max(table(prior_location))),
+    .by = c(superseded_gcp_name_feb25, video_frame_count, subject_id)
+  )
+loc_switches_raw_by_participant <- summarized_data(loc_switches_raw_by_video, "subject_id", "n", "subject_id")
+ggplot(loc_switches_raw_by_video, aes(x = subject_id, y = n, size = video_frame_count, color = location)) +
+  geom_jitter(width = 0.2, height = 0, alpha = 0.2) +
+  geom_point(
+    data = loc_switches_raw_by_participant,
+    aes(x = subject_id, y = mean_value),
+    inherit.aes = FALSE,
+    size = 2
+  ) +
+  geom_errorbar(
+    data = loc_switches_raw_by_participant,
+    aes(x = subject_id, ymin = ci_lower, ymax = ci_upper),
+    inherit.aes = FALSE,
+    width = 0.1
+  ) +
+  scale_color_discrete(name = "most common location in video") +
+    scale_size_continuous(name = "Video Frame Count") +
+  labs(
+    title = "Switches per Video by Participant",
+    x = "Participant ID",
+    y = "Number of Switches"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  coord_cartesian(ylim = c(0, 30))
+  
+hist((
+  stable_loc_counts |>
+    group_by(superseded_gcp_name_feb25) |>
+    summarize(num_distinct_loc = n_distinct(location))
+)$num_distinct_loc, breaks=8, main = "Distinct Locations per video", xlab="number of locations")
+
+hist((
+  stable_loc_counts |>
+    group_by(superseded_gcp_name_feb25) |>
+    summarize(num_distinct_loc = n())
+)$num_distinct_loc, breaks=20, main = "Locations moved per video", xlab="number of locations")
+```
+
+## Plotting across age
+```{r}
+loc_switches_plot_by_subject(stable_switches_raw |> left_join(stable_loc_counts_by_participant), title=paste0("Location switches across age and subject (location > ",LOCATION_LENGTH, " sec)"), y="Prop. location switches from location")
+```
+
+```{r}
+prop_switches <- stable_switches_raw |>
+  left_join(stable_loc_counts_by_participant) |>
+  summarize(prop = n()/first(num_distinct_locations), .by=c(age_bin, subject_id)) |>
+    group_by(subject_id) |>
+    ungroup() |>
+  avg_age() |> left_join(stable_loc_hours |> summarize(total_hours = sum(total_hours), .by=c(subject_id, age_bin)))
+
+switches_weighted <- weighted_ci_normal_df(prop_switches, value_col = "prop", weight_col = "total_hours", group_col = "age_bin")
+
+plot_subject_breakdown(switches_weighted, prop_switches, x_var="age_bin", y_var=
+"prop", group="subject_id", input_title="Location switches across age (weighted by hours of data, points represent subjects)",
+                                                                      x_lab = "Age Bin (months)", y_lab = "Proportion of switches from a location")
+```
+
+## Lmers
+```{r}
+loc_switch_model <- lmer(scale(prop) ~ scale(age_avg) + scale(total_hours) +  (1 | subject_id), data = prop_switches)
+summary(loc_switch_model)
+```
+
+Accounting for the variability of affordances offered across locations
+```{r}
+stable_loc_counts_by_location_age <- stable_loc_counts |>
+  group_by(age_bin, subject_id, location) |>
+  summarise(num_distinct_locations = n(), total_run_length = sum(run_length), avg_location_length = mean(run_length), .groups = "drop")
+
+prop_switches_by_loc <- stable_switches_raw |>
+  ungroup() |>
+  rename(location = prior_location) |>
+  left_join(stable_loc_counts_by_location_age) |>
+  summarize(prop = n()/first(num_distinct_locations), num_distinct_locations=first(num_distinct_locations), mean_prev_loc_length=mean(num_previous), num_switches = n(), .by=c(age_bin, subject_id, location)) |>
+  avg_age() |>left_join(stable_loc_hours) |> filter(total_hours > 1)
+
+loc_switch_model <- lmer(scale(prop) ~ scale(age_avg) + scale(total_hours) + (1|subject_id) + (1 | location), data = prop_switches_by_loc)
+summary(loc_switch_model)
+```
+GLMER
+```{r}
+glmer_model <- glmer(
+  cbind(num_switches, num_distinct_locations - num_switches) ~ scale(age_avg) + 
+    (1 | subject_id) + (1 | location),
+  data = prop_switches_by_loc,
+  family = binomial
+)
+summary(glmer_model)
+```
+
+Using total time for the proportion of location switches instead of just location visit
+```{r}
+prop_switches_by_loc <- stable_switches_raw |>
+  ungroup() |>
+  rename(location = prior_location) |>
+  left_join(stable_loc_counts_by_location_age) |>
+  summarize(prop = n()/first(total_run_length), n=n(), num_distinct_locations=first(num_distinct_locations), mean_prev_loc_length=mean(num_previous), total_hours=first(total_run_length)/3600, .by=c(age_bin, subject_id, location)) |>
+  avg_age() 
+
+loc_switch_model <- lmer(scale(prop) ~ scale(age_avg) + scale(total_hours) + (1|subject_id) + (1 | location), data = prop_switches_by_loc)
+summary(loc_switch_model)
+```
+
+Just predicting the raw number of location switches
+```{r}
+loc_switch_model <- lmer(scale(n) ~ scale(age_avg) + scale(total_hours) + (1|subject_id) + (1 | location), data = prop_switches_by_loc)
+summary(loc_switch_model)
+```
+
+
+## Types of location switches
+```{r}
+ggplot(loc_switches_raw |> filter(num_previous >= LOCATION_LENGTH & num_future >= LOCATION_LENGTH), aes(x = unique_pair)) +
+  geom_bar(alpha=0.5) +
+   theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Location Pair", y = "Count", title="Number of location switches by unique location switch pair")
+
+stable_loc_counts_by_location <- stable_loc_counts |>
+  group_by(location, subject_id) |>
+  summarise(num_distinct_locations = n(), total_run_length=sum(run_length), avg_location_length = mean(run_length), .groups = "drop") 
+
+prop_switches_by_loc <- stable_switches_raw |> ungroup() |>
+  rename(location = prior_location) |>
+  left_join(stable_loc_counts_by_location) |>
+  summarize(prop = n()/first(num_distinct_locations), total_hours=(first(avg_location_length)*first(num_distinct_locations))/3600, .by=c(location, subject_id)) 
+
+weighted_props <- weighted_ci_normal_df(prop_switches_by_loc, value_col="prop", weight_col="total_hours", group_col="location") 
+plot_subject_breakdown(weighted_props, prop_switches_by_loc, x_var="location", y_var="prop", input_title="Proportion of location switches by starting location", group="subject_id", x_lab="Starting location", y_lab="Proportion of switches", use_line=FALSE)
+```
+
+```{r}
+# Calculate transition probabilities 
+transition_probs <- stable_loc_counts |>
+  # Get total time spent at each location 
+  group_by(location) |>
+  summarise(total_time_at_location = sum(run_length), num_distinct_locations = n(), .groups = "drop") |>
+  # Add switches from each location
+  left_join(
+    stable_switches_raw |> 
+      rename(location = prior_location) |>
+      group_by(location, curr_location) |>
+      summarise(num_switches = n(), .groups = "drop"),
+    by = c("location")
+  ) |>
+  # Fill in missing combinations with 0 switches
+  complete(location, curr_location, fill = list(num_switches = 0)) |>
+  # Fill in missing values for combinations that didn't exist in original data
+  group_by(location) |>
+  fill(total_time_at_location, num_distinct_locations, .direction = "downup") |>
+  # Calculate probability of switching to each location
+  mutate(
+    # Probability = number of switches to destination / number of visits to origin location
+    switch_prob = ifelse(is.na(num_distinct_locations) | num_distinct_locations == 0, 
+                        0, 
+                        num_switches / num_distinct_locations)
+  ) 
+
+# Create the heatmap
+ggplot(transition_probs, aes(x = curr_location, y = location, fill = switch_prob)) +
+  geom_tile(color = "white", size = 0.5) +
+  scale_fill_gradient2(
+    low = "white", 
+    mid = "lightblue", 
+    high = "darkblue",
+    midpoint = max(transition_probs$switch_prob, na.rm = TRUE) / 2,
+    name = "Transition\nProbability"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    axis.text.y = element_text(hjust = 1),
+    panel.grid = element_blank(),
+    axis.ticks = element_blank()
+  ) +
+  labs(
+    x = "Destination Location", 
+    y = "Origin Location", 
+    title = "Location Transition Probabilities",
+    subtitle = "Probability of moving from origin location to destination location when in origin location"
+  ) +
+  # Add text labels with the probability values
+  geom_text(
+    aes(label = sprintf("%.3f", switch_prob)), 
+    color = ifelse(transition_probs$switch_prob > max(transition_probs$switch_prob, na.rm = TRUE) * 0.6, "white", "black"),
+    size = 3
+  )
+```
+Exporting list of frames with location switches
+```{r}
+stable_switches_raw <- stable_switches_raw |>
+  mutate(
+    switch_second = as.integer(frame_num),
+    start_switch = switch_second - 5,
+    end_switch = switch_second + 5
+  )
+write.csv(stable_switches_raw, here("data/stable_location_switches.csv"))
+```
