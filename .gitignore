@@ -7,3 +7,6 @@ data/
 vis*/
 **/__pycache__/
 outputs/
+.Rproj.user
+.Rdata
+.Rhistory

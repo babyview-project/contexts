@@ -1,0 +1,40 @@
+```{r}
+library(here)
+library(tidyverse)
+library(stringr)
+library(zoo)
+```
+
+```{r}
+df <- read.csv(here("data", "all_contexts.csv"))
+```
+
+```{r}
+df_cleaned <- df |>
+  mutate(superseded_gcp_name_feb25 = sub("_processed.*", "", video_id),
+         chunk_num = as.integer(sub(".*_(\\d+)\\.mp4", "\\1", basename(video_path))),
+    start_time = chunk_num * 10,
+    end_time = start_time + 10) |>
+  mutate(locations_avg = rollapply(Location, width = 3,
+                                FUN = \(x) {
+                                  ux <- unique(x)
+                                  ux <- ux[!is.na(ux)]
+                                  if (length(ux) == 0) return(NA)
+                                  counts <- tabulate(match(x, ux))
+                                  # break ties by favouring middle
+                                  if (length(x) >= 3) {
+                                    middle_val <- x[3]
+                                    if (!is.na(middle_val) && middle_val %in% ux) {
+                                      counts[which(ux == middle_val)] <- counts[which(ux == middle_val)] + 0.5
+                                    }
+                                  }
+                                  ux[which.max(counts)]
+                                },
+                                partial = TRUE))
+  
+# smoothing
+```
+
+```{r}
+write.csv(df_cleaned, here("data", "all_contexts_cleaned.csv"))
+```

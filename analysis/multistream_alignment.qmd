@@ -1,0 +1,96 @@
+```{r}
+library(tidyverse)
+library(here)
+library(glue)
+```
+
+# TODO:
+1. Add in objects and transcripts
+2. Keyness
+3. Clustering based on object distributions, word distributions, transcripts
+
+```{r}
+df_cleaned <- read.csv(here("data", "all_contexts_cleaned.csv"))
+```
+
+# Combine annotations
+```{r}
+bind_annotations <- function(input_video_id,
+                             objects = "random",
+                             tokens = "random",
+                             k = 5, threshold = 5) {
+  # activities
+  vid_activities <- df_cleaned |>
+    filter(superseded_gcp_name_feb25 == input_video_id)
+  
+   vid_activities_cleaned <- vid_activities |>
+    select(superseded_gcp_name_feb25, start_time, end_time, 
+           annotation = Activity, locations_avg) |>
+    mutate(start_time = as.numeric(start_time),
+           end_time = as.numeric(end_time)) |>
+    # Create a row for each second within the 10-second clip
+    rowwise() |>
+    reframe(
+      superseded_gcp_name_feb25 = superseded_gcp_name_feb25,
+      timestamp = seq(start_time, end_time, by = 1),
+      annotation = annotation,
+      location = locations_avg,
+      stream = "activities"
+    )
+   
+   vid_activities_chunked <- vid_activities_cleaned |>
+    select(-location)
+  
+  # chunked locations (10-second clips)
+  vid_locations_chunks <- vid_activities_cleaned |>
+    mutate(
+      annotation = location,
+      stream = "locations"
+    )
+
+  # combine
+  vid_full <- list(vid_activities_chunked,
+                   vid_locations_chunks) |> 
+    list_rbind()
+}
+```
+
+
+# Kosie Plot
+```{r}
+STREAM_COLORS <- c("Objects" = "#e06666",
+                   "Activities" = "#f6b26b",
+                   "Frame locations" = "#90EE90",
+                   "Locations"="#6B8E23",
+                   "Speech" = "#76a5af")
+
+make_kosie_plot <- function(full_annotations) {
+  full_annotations |> 
+    mutate(stream = str_to_sentence(stream),
+           annotation = annotation |> fct_infreq() |> fct_rev()) |> 
+    #filter(stream == "Chunk locations" | stream == "Frame locations" | stream == "Activities") |>
+    ggplot(aes(x = timestamp,
+               y = annotation,
+               fill = stream)) +
+    geom_tile(width = 1, height = 1) +
+    facet_grid(stream ~ .,
+               scales = "free_y",
+               space = "free_y") +
+    labs(x = "Time (s)",
+         y = "Annotation") +
+    scale_fill_manual(values = STREAM_COLORS) +
+    theme(legend.position = "none") +
+    theme_minimal(base_size = 14) +
+    theme(
+      legend.position = "none",
+      strip.text = element_text(size = 12)  # Increase this value to your preference
+    )
+    
+}
+```
+
+## just random ids for now
+```{r}
+random_video_id <- sample(unique(df_cleaned$superseded_gcp_name_feb25), 1)
+make_kosie_plot(bind_annotations(random_video_id, threshold = 10))
+```
