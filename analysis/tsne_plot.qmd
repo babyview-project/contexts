@@ -1,0 +1,700 @@
+---
+title: "t-SNE plot"
+format: html
+---
+
+I (Alvin) ran the t-SNE in Python, but plotting is horrible… bringing it back into R for plotting.
+
+```{r}
+library(MASS)
+library(tidyverse)
+library(here)
+library(glue)
+library(ggrepel)
+library(ggraph)
+# library(udpipe)
+library(igraph)
+library(ggtext)
+
+theme_set(theme_bw() +
+            theme(panel.grid = element_blank(),
+                  strip.background = element_blank()))
+```
+
+```{r}
+df_tsne <- read_csv(here("data", "all_contexts_tsne.csv")) |> 
+  mutate(Activity = factor(Activity) |> fct_infreq(),
+         Locations = factor(Location) |> fct_infreq())
+```
+
+# Activities
+```{r}
+df_summary_activity <- df_tsne |> 
+  group_by(Activity) |> 
+  summarise(n = n()) |> 
+  arrange(desc(n))
+```
+
+```{r}
+df_tsne_drop_activity <- df_tsne |> 
+  left_join(df_summary_activity, by = join_by(Activity)) |> 
+  mutate(Activity = case_when(
+    n < 5000 ~ "other",
+    Activity == "sitting" ~ "other",
+    Activity == "walking" ~ "other",
+    .default = Activity
+  ))
+```
+
+```{r}
+# find densest region for each activity for label location
+df_labels_activity <- df_tsne_drop_activity |> 
+  filter(Activity != "other") |>
+  group_by(Activity) |>
+  group_modify(~ {
+    dens <- kde2d(.x$tsne_x, .x$tsne_y, n = 100)
+    dens_df <- as.data.frame(expand.grid(tsne_x = dens$x, tsne_y = dens$y))
+    dens_df$density <- as.vector(dens$z)
+    dens_df <- dens_df |> arrange(desc(density))
+    top_point <- dens_df[1, ]
+    tibble(tsne_x = top_point$tsne_x, tsne_y = top_point$tsne_y)
+  }) |>
+  ungroup()
+# join back the original tsne coords and descriptions for the closest point
+df_labels_activity_text <- df_labels_activity |> 
+  rowwise() |> 
+  mutate(nearest_idx = which.min((df_tsne_drop_activity$tsne_x - tsne_x)^2 + 
+                                   (df_tsne_drop_activity$tsne_y - tsne_y)^2)) |> 
+  ungroup() |> 
+  mutate(tsne_x = df_tsne_drop_activity$tsne_x[nearest_idx],
+         tsne_y = df_tsne_drop_activity$tsne_y[nearest_idx],
+         # Activity = df_tsne_drop_activity$Activity[nearest_idx],
+         description = df_tsne_drop_activity$`Video description`[nearest_idx])
+df_labels_activity_fixed <- df_labels_activity_text |> 
+  mutate(activity_fixed = Activity |> str_to_sentence() |> str_replace_all("tv", "TV"),
+         # label = glue('bold("{activity_fixed}:")~"{description}"') |> 
+         #   str_wrap(50) |> 
+         #   str_replace_all("\n", "\"\n\"") |> 
+         #   str_split("\n") |> 
+         #   map(\(x) reduce(x, \(a, b) glue("atop({a}, {b})"))),
+         label = glue("{activity_fixed}: \"{description}\"") |> 
+           str_wrap(70))
+```
+
+
+```{r}
+ggplot(mapping = aes(x = tsne_x, y = tsne_y,
+             col = Activity)) +
+  # geom_point(data = df_tsne_drop_activity |> filter(Activity == "other"), 
+  #            size = .01, alpha = .05, col = "#555555") +
+  geom_point(data = df_tsne_drop_activity |> filter(Activity != "other"), 
+             size = .01, alpha = .05) +
+  geom_label_repel(
+    data = df_labels_activity |> filter(Activity != "other"),
+    aes(label = Activity, col = Activity),
+    size = 3,
+    box.padding = 0.5,
+    point.padding = 0.3,
+    segment.size = 0.5,
+    show.legend = FALSE,
+    max.overlaps = Inf,
+    force = 8,
+    direction = "both"
+  ) +
+  labs(x = "t-SNE dimension 1",
+       y = "t-SNE dimension 2") +
+  theme(legend.position = "none") +
+  # scale_colour_manual(values = c(
+  #   c("#FAA43AFF", "#60BD68FF", "#F17CB0FF", "#B2912FFF", 
+  #     "#F15854FF", "#5DA5DAFF", "#B276B2FF", "#DECF3FFF")
+  # ))
+  ggthemes::scale_colour_solarized()
+```
+
+```{r}
+ggplot(mapping = aes(x = tsne_x, y = tsne_y,
+             col = Activity)) +
+  # geom_point(data = df_tsne_drop_activity |> filter(Activity == "other"), 
+  #            size = .01, alpha = .05, col = "#555555") +
+  geom_point(data = df_tsne_drop_activity |> filter(Activity != "other"), 
+             size = .01, alpha = .05) +
+  geom_label_repel(
+    data = df_labels_activity_fixed |> filter(Activity != "other"),
+    aes(label = label, col = Activity),
+    size = 1.6,
+    box.padding = 0.5,
+    point.padding = 0.3,
+    segment.size = 0.5,
+    show.legend = FALSE,
+    max.overlaps = Inf,
+    force = 8,
+    direction = "both",
+    # parse = TRUE,
+    seed = 44
+  ) +
+  # labs(x = "t-SNE dimension 1",
+  #      y = "t-SNE dimension 2") +
+  theme(legend.position = "none",
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        panel.border = element_blank()) +
+  # scale_colour_manual(values = c(
+  #   c("#FAA43AFF", "#60BD68FF", "#F17CB0FF", "#B2912FFF", 
+  #     "#F15854FF", "#5DA5DAFF", "#B276B2FF", "#DECF3FFF")
+  # ))
+  ggthemes::scale_colour_solarized()
+```
+
+```{r}
+ggplot(data = df_tsne_drop_activity |> filter(Activity != "other"),
+       mapping = aes(x = tsne_x, y = tsne_y,
+             col = Activity)) +
+  # geom_point(data = df_tsne_drop_activity |> filter(Activity == "other"), 
+  #            size = .01, alpha = .05, col = "#555555") +
+  geom_point(size = .01, alpha = .05) +
+  geom_label_repel(
+    data = df_labels_activity_fixed |> filter(Activity != "other"),
+    aes(label = label, col = Activity),
+    # cooking, eating, exploring, looking at device, playing, reading, watching tv
+    nudge_x = c(3, 2.5, 2, 2, -100, -2, -6),
+    nudge_y = c(0, 1, 0, -6, 0, -1, -4),
+    size = 1.6,
+    box.padding = 0.5,
+    point.padding = 0.3,
+    segment.size = 0.5,
+    show.legend = FALSE,
+    max.overlaps = Inf,
+    force = 90,
+    direction = "both",
+    seed = 42
+  ) +
+  # labs(x = "t-SNE dimension 1",
+  #      y = "t-SNE dimension 2") +
+  theme(legend.position = "none",
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        panel.border = element_blank()) +
+  coord_cartesian(xlim = c(-180, 180)) +
+  # scale_colour_manual(values = c(
+  #   c("#FAA43AFF", "#60BD68FF", "#F17CB0FF", "#B2912FFF", 
+  #     "#F15854FF", "#5DA5DAFF", "#B276B2FF", "#DECF3FFF")
+  # ))
+  ggthemes::scale_colour_solarized()
+```
+
+```{r}
+df_labels_activity_pos <- df_labels_activity_fixed |> 
+  # cleaning, cooking, eating, exploring, looking at device, playing, reading, watching tv
+  mutate(tsne_x = c(190, 175, 50, 170, 100, -170, -70, -160),
+         tsne_y = c(0, 90, 140, -100, -145, 100, -140, -100),
+         label = glue("**{activity_fixed}:** \"{description}\""),
+         label = case_when(
+           Activity == "exploring" ~ str_wrap(label, 65),
+           Activity == "cleaning" ~ str_wrap(label, 50),
+           Activity == "cooking" ~ str_wrap(label, 60),
+           .default = str_wrap(label, 70)
+         ) |> 
+           str_replace_all("\n", "<br>"))
+
+df_lines <- df_labels_activity_fixed |> 
+  filter(Activity != "other") |> 
+  select(tsne_x, tsne_y, Activity) |> 
+  left_join(df_labels_activity_pos |> 
+              select(tsne_x_pos = tsne_x, 
+                     tsne_y_pos = tsne_y, 
+                     Activity), by = join_by(Activity))
+
+ggplot(data = df_tsne_drop_activity |> filter(Activity != "other"),
+       mapping = aes(x = tsne_x, y = tsne_y,
+             col = Activity)) +
+  geom_point(size = .01, alpha = .05) +
+  geom_segment(data = df_lines,
+               aes(xend = tsne_x_pos, yend = tsne_y_pos)) +
+  geom_richtext(data = df_labels_activity_pos,
+                aes(label = label),
+                size = 1.8) +
+  theme(legend.position = "none",
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        panel.border = element_blank()) +
+  coord_cartesian(xlim = c(-230, 230),
+                  ylim = c(-150, 150)) +
+  ggthemes::scale_colour_solarized()
+```
+
+
+```{r}
+ggplot(data = df_tsne_drop_activity |> filter(Activity != "other"),
+       mapping = aes(x = tsne_x, y = tsne_y,
+             col = Activity)) +
+  # geom_point(data = df_tsne_drop_activity |> filter(Activity == "other"), 
+  #            size = .01, alpha = .05, col = "#555555") +
+  geom_point(size = .01, alpha = .05) +
+  geom_label_repel(
+    data = df_labels_activity_fixed |> filter(Activity != "other"),
+    aes(label = label, col = Activity),
+    # cooking, eating, exploring, looking at device, playing, reading, watching tv
+    nudge_x = 150 - df_labels_activity_fixed |> filter(Activity != "other") |> pull(tsne_x),
+    nudge_y = c(27.5, 1, 27.5, 60, 20, -1, 15),
+    size = 1.6,
+    box.padding = 0.5,
+    point.padding = 0.3,
+    segment.size = 0.5,
+    show.legend = FALSE,
+    max.overlaps = Inf,
+    force = 0,
+    direction = "both",
+    seed = 42,
+    hjust = 0
+  ) +
+  # labs(x = "t-SNE dimension 1",
+  #      y = "t-SNE dimension 2") +
+  theme(legend.position = "none",
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        panel.border = element_blank()) +
+  coord_cartesian(xlim = c(-110, 255)) +
+  ggthemes::scale_colour_solarized()
+```
+
+
+Visualiser function
+```{r}
+inspect_activity <- function(activity, colour = "cornflowerblue") {
+  ggplot(mapping = aes(x = tsne_x, y = tsne_y,
+                       col = Activity)) +
+    geom_point(data = df_tsne_drop_activity |> filter(Activity != activity), 
+               size = .01, alpha = .05, col = "#555555") +
+    geom_point(data = df_tsne_drop_activity |> filter(Activity == activity), 
+               size = .01, alpha = .05, col = colour) +
+    geom_label_repel(
+      data = df_labels_activity |> filter(Activity == activity),
+      aes(label = Activity, col = Activity),
+      size = 3,
+      box.padding = 0.5,
+      point.padding = 0.3,
+      segment.size = 0.5,
+      show.legend = FALSE,
+      max.overlaps = Inf,
+      force = 8,
+      direction = "both",
+      col = colour
+    ) +
+    labs(x = "t-SNE dimension 1",
+         y = "t-SNE dimension 2") +
+    theme(legend.position = "none")
+} 
+```
+
+```{r}
+inspect_activity("watching tv")
+```
+
+## k-means
+```{r}
+set.seed(42)
+kmc_reading <- df_tsne |> 
+  filter(Activity == "reading") |> 
+  dplyr::select(tsne_x, tsne_y) |> 
+  kmeans(centers = 3)
+df_tsne_reading <- df_tsne |>
+  filter(Activity == "reading") |> 
+  mutate(cluster = factor(kmc_reading$cluster))
+```
+
+```{r}
+ggplot(mapping = aes(x = tsne_x, y = tsne_y)) +
+  geom_point(data = df_tsne_drop_activity |> filter(Activity != "reading"),
+             size = .01, alpha = .05, col = "#555555") +
+  geom_point(data = df_tsne_reading, mapping = aes(col = cluster),
+             size = .01, alpha = .05) +
+  labs(x = "t-SNE dimension 1",
+       y = "t-SNE dimension 2") +
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(override.aes = list(alpha = 1)))
+```
+
+By manual inspection of videos, cluster 1 shows children reading while sitting in their caregivers' lap or by themselves (book appears in the bottom of the video); cluster 3 has caregivers reading to children but at a distance (book appears further away at the centre of the video); cluster 2 is more ambiguous with scenes that sometimes have books or paper but are less clearly instances of shared book reading.
+
+```{r}
+set.seed(42)
+kmc_tv <- df_tsne |> 
+  filter(Activity == "watching tv") |> 
+  dplyr::select(tsne_x, tsne_y) |> 
+  kmeans(centers = 3)
+df_tsne_tv <- df_tsne |>
+  filter(Activity == "watching tv") |> 
+  mutate(cluster = factor(kmc_tv$cluster))
+```
+
+```{r}
+ggplot(mapping = aes(x = tsne_x, y = tsne_y)) +
+  geom_point(data = df_tsne_drop_activity |> filter(Activity != "watching tv"),
+             size = .01, alpha = .05, col = "#555555") +
+  geom_point(data = df_tsne_tv, mapping = aes(col = cluster),
+             size = .01, alpha = .05) +
+  labs(x = "t-SNE dimension 1",
+       y = "t-SNE dimension 2") +
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(override.aes = list(alpha = 1)))
+```
+
+This time the clusters seem more spurious. Clips from cluster 1 typically have watching a screen (TV/tablet) as a partial or background activity; cluster 2 has "a person watching TV" whereas cluster 3 has "a child watching TV" in the descriptions with no clear visual difference.
+
+```{r}
+set.seed(42)
+kmc_playing <- df_tsne |> 
+  filter(Activity == "playing") |> 
+  dplyr::select(tsne_x, tsne_y) |> 
+  kmeans(centers = 3)
+df_tsne_playing <- df_tsne |>
+  filter(Activity == "playing") |> 
+  mutate(cluster = factor(kmc_playing$cluster))
+```
+
+```{r}
+ggplot(mapping = aes(x = tsne_x, y = tsne_y)) +
+  geom_point(data = df_tsne_drop_activity |> filter(Activity != "playing"),
+             size = .01, alpha = .05, col = "#555555") +
+  geom_point(data = df_tsne_playing, mapping = aes(col = cluster),
+             size = .01, alpha = .05) +
+  labs(x = "t-SNE dimension 1",
+       y = "t-SNE dimension 2") +
+  theme(legend.position = "bottom") + 
+  guides(colour = guide_legend(override.aes = list(alpha = 1)))
+```
+
+```{r}
+set.seed(123)
+df_labels_playing <- df_tsne_playing |> 
+  group_by(Activity, cluster) |> 
+  summarise(tsne_x = mean(tsne_x) + rnorm(1, 0, 5),
+            tsne_y = mean(tsne_y) + rnorm(1, 0, 5),
+            .groups = "drop") |> 
+  ungroup()
+
+df_labels_playing_text <- df_labels_playing |> 
+  rowwise() |> 
+  mutate(nearest_idx = which.min((df_tsne_drop_activity$tsne_x - tsne_x)^2 + 
+                                   (df_tsne_drop_activity$tsne_y - tsne_y)^2)) |> 
+  ungroup() |> 
+  mutate(tsne_x = df_tsne_drop_activity$tsne_x[nearest_idx],
+         tsne_y = df_tsne_drop_activity$tsne_y[nearest_idx],
+         # Activity = df_tsne_drop_activity$Activity[nearest_idx],
+         description = df_tsne_drop_activity$`Video description`[nearest_idx])
+df_labels_playing_fixed <- df_labels_playing_text |> 
+  mutate(activity_fixed = Activity |> str_to_sentence() |> str_replace_all("tv", "TV"),
+         # label = glue('bold("{activity_fixed}:")~"{description}"') |> 
+         #   str_wrap(50) |> 
+         #   str_replace_all("\n", "\"\n\"") |> 
+         #   str_split("\n") |> 
+         #   map(\(x) reduce(x, \(a, b) glue("atop({a}, {b})"))),
+         label = glue("{activity_fixed}: \"{description}\"") |> 
+           str_wrap(70))
+```
+
+```{r new_plot}
+df_labels_activity_pos_rep <- df_labels_activity_fixed |> 
+  filter(Activity != "playing") |> 
+  bind_rows(df_labels_playing_fixed) |> 
+  # cleaning, cooking, eating, exploring, looking at device, reading, watching tv, playing x3
+  mutate(tsne_x = c(190, 175, 50, 170, 100, -70, -160, -140, -180, -180),
+         tsne_y = c(0, 90, 140, -100, -145, -140, -100, 125, 60, -50),
+         label = glue("**{activity_fixed}:** \"{description}\""),
+         label = case_when(
+           Activity == "exploring" ~ str_wrap(label, 65),
+           Activity == "cleaning" ~ str_wrap(label, 50),
+           Activity == "cooking" ~ str_wrap(label, 60),
+           Activity == "playing" ~ str_wrap(label, 60),
+           .default = str_wrap(label, 70)
+         ) |> 
+           str_replace_all("\n", "<br>"))
+
+df_lines_rep <- df_labels_activity_fixed |> 
+  filter(Activity != "playing") |> 
+  bind_rows(df_labels_playing_fixed) |>
+  select(tsne_x, tsne_y, Activity) |> 
+  cbind(df_labels_activity_pos_rep |> 
+              select(tsne_x_pos = tsne_x, 
+                     tsne_y_pos = tsne_y))
+
+ggplot(data = df_tsne_drop_activity |> filter(Activity != "other"),
+       mapping = aes(x = tsne_x, y = tsne_y,
+             col = Activity)) +
+  geom_point(size = .01, alpha = .05) +
+  geom_segment(data = df_lines_rep,
+               aes(xend = tsne_x_pos, yend = tsne_y_pos)) +
+  geom_richtext(data = df_labels_activity_pos_rep,
+                aes(label = label),
+                size = 1.8) +
+  theme(legend.position = "none",
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        panel.border = element_blank()) +
+  coord_cartesian(xlim = c(-230, 230),
+                  ylim = c(-150, 150)) +
+  ggthemes::scale_colour_solarized()
+```
+
+
+## Keywords
+```{r eval=F}
+udpipe_download_model("english-ewt")
+ud_model <- udpipe_load_model("english-ewt-ud-2.5-191206.udpipe")
+
+udpipe_annotate(ud_model, df_tsne$`Video description`)
+```
+
+Something crude as a first pass
+```{r}
+df_tokens <- df_tsne |> 
+  mutate(words = `Video description` |> str_to_lower() |> 
+           str_remove_all("[^a-z ]") |> str_split(" ")) |> 
+  unnest(words)
+df_tokens_summary <- df_tokens |> 
+  group_by(Activity, words) |> 
+  summarise(n = n(),
+            .groups = "drop_last") |> 
+  mutate(freq = n / sum(n)) |> 
+  arrange(Activity, desc(freq))
+df_tokens_overall <- df_tokens |> 
+  group_by(words) |> 
+  summarise(n = n(),
+            .groups = "drop") |> 
+  mutate(freq = n / sum(n))
+df_tokens_excess <- df_tokens_summary |> 
+  left_join(df_tokens_overall, by = join_by(words), 
+            suffix = c("_activity", "_overall")) |> 
+  mutate(excess = freq_activity - freq_overall) |> 
+  arrange(Activity, desc(excess))
+```
+
+
+```{r}
+KEYNESS_CORRECTION = 10
+
+tokens_of_interest <- all_trans_annotated |> 
+  group_by(token) |> 
+  summarise(token_counts = n(),
+            .groups = "drop") |>
+  filter(token_counts >= 20 + KEYNESS_CORRECTION) |>
+  pull(token)
+
+locations_of_interest <- trans_by_loc |> 
+  filter(!is.na(locations_avg)) |> 
+  pull(locations_avg) |> 
+  unique()
+
+keyness <- map(locations_of_interest, \(loc) {
+  foc <- trans_by_loc |> 
+    filter(locations_avg == loc) |>
+    pull(token) |> 
+    ARF() |> 
+    rename(arf_focal = ARF)
+  ref <- trans_by_loc |> 
+    filter(locations_avg != loc) |> 
+    pull(token) |> 
+    ARF() |> 
+    rename(arf_reference = ARF)
+  foc |> 
+    left_join(ref, by = join_by(word)) |> 
+    mutate(keyness = arf_focal / arf_reference) |> 
+    rename(token = word) |> 
+    mutate(location = loc)
+}) |> list_rbind()
+```
+
+
+# Locations
+```{r}
+df_summary_location <- df_tsne |> 
+  group_by(Location) |> 
+  summarise(n = n()) |> 
+  arrange(desc(n))
+```
+
+```{r}
+df_tsne_drop_location <- df_tsne |> 
+  left_join(df_summary_location, by = join_by(Location)) |> 
+  mutate(Location = case_when(
+    n < 1000 ~ "other",
+    .default = Location
+  ))
+```
+
+```{r}
+df_labels_location <- df_tsne_drop_location |> 
+  filter(Location != "other") |>
+  group_by(Location) |>
+  group_modify(~ {
+    dens <- kde2d(.x$tsne_x, .x$tsne_y, n = 100)
+    dens_df <- as.data.frame(expand.grid(tsne_x = dens$x, tsne_y = dens$y))
+    dens_df$density <- as.vector(dens$z)
+    dens_df <- dens_df |> arrange(desc(density))
+    top_point <- dens_df[1, ]
+    tibble(tsne_x = top_point$tsne_x, tsne_y = top_point$tsne_y)
+  }) |>
+  ungroup()
+```
+
+
+```{r}
+ggplot(mapping = aes(x = tsne_x, y = tsne_y,
+             col = Location)) +
+  geom_point(data = df_tsne_drop_location |> filter(Location == "other"), 
+             size = .01, alpha = .05, col = "#555555") +
+  geom_point(data = df_tsne_drop_location |> filter(Location != "other"), 
+             size = .01, alpha = .05) +
+  geom_label_repel(
+    data = df_labels_location |> filter(Location != "other"),
+    aes(label = Location, col = Location),
+    size = 3,
+    box.padding = 0.5,
+    point.padding = 0.3,
+    segment.size = 0.5,
+    show.legend = FALSE,
+    max.overlaps = Inf,
+    force = 8,
+    direction = "both"
+  ) +
+  labs(x = "t-SNE dimension 1",
+       y = "t-SNE dimension 2") +
+  theme(legend.position = "none")
+```
+
+Visualiser function
+```{r}
+inspect_location <- function(location, colour = "cornflowerblue") {
+  ggplot(mapping = aes(x = tsne_x, y = tsne_y,
+                       col = Location)) +
+    geom_point(data = df_tsne_drop_location |> filter(Location != location), 
+               size = .01, alpha = .05, col = "#555555") +
+    geom_point(data = df_tsne_drop_location |> filter(Location == location), 
+               size = .01, alpha = .05, col = colour) +
+    geom_label_repel(
+      data = df_labels_location |> filter(Location == location),
+      aes(label = Location, col = Location),
+      size = 3,
+      box.padding = 0.5,
+      point.padding = 0.3,
+      segment.size = 0.5,
+      show.legend = FALSE,
+      max.overlaps = Inf,
+      force = 8,
+      direction = "both",
+      col = colour
+    ) +
+    labs(x = "t-SNE dimension 1",
+         y = "t-SNE dimension 2") +
+    theme(legend.position = "none")
+} 
+```
+
+```{r}
+inspect_location("hallway")
+```
+
+# Smoothing and network
+```{r}
+df_smooth <- df_tsne |> 
+  mutate(video = video_id |> str_remove("_[0-9]+\\.mp4")) |> 
+  group_by(video) |> 
+  mutate(activity_lagged = lag(Activity),
+         activity_leaded = lead(Activity),
+         activity_smooth = case_when(
+           activity_lagged == activity_leaded ~ activity_lagged,
+           .default = Activity
+         ),
+         location_lagged = lag(Location),
+         location_leaded = lead(Location),
+         location_smooth = case_when(
+           location_lagged == location_leaded ~ location_lagged,
+           .default = Location
+         ))
+```
+
+```{r}
+# make an igraph, with edge weights as counts of transitions
+activity_include <- df_summary_activity |>
+  filter(n >= 5000) |>
+  pull(Activity)
+
+edges_activity <- df_smooth |>
+  mutate(activity_smooth_next = lead(activity_smooth)) |> 
+  ungroup() |> 
+  count(activity_smooth, activity_smooth_next) |> 
+  rename(from = activity_smooth,
+         to = activity_smooth_next,
+         weight = n)
+
+edges_activity_include <- edges_activity |> 
+  filter(from %in% activity_include,
+         to %in% activity_include)
+
+# graph_activity <- graph_from_data_frame(
+#   edges_activity_include |> 
+#     filter(!is.na(from), !is.na(to),
+#            from != to),
+#   directed = TRUE
+# )
+
+edges_activity_simplified <- edges_activity_include |> 
+  mutate(from = as.character(from),
+         to = as.character(to),
+         node1 = pmin(from, to),
+         node2 = pmax(from, to)) |> 
+  group_by(node1, node2) |> 
+  summarise(weight = sum(weight), .groups = 'drop') |> 
+  rename(from = node1, to = node2)
+
+nodes_activity_simplified <- df_smooth |> 
+  mutate(activity_smooth_next = lead(activity_smooth)) |> 
+  filter(activity_smooth != activity_smooth_next |
+           is.na(activity_smooth_next)) |> 
+  group_by(Activity) |> 
+  summarise(n = n()) |> 
+  filter(Activity %in% activity_include) |> 
+  rename(name = Activity, size = n)
+
+graph_activity_simplified <- graph_from_data_frame(
+  edges_activity_simplified |> 
+    filter(!is.na(from), !is.na(to),
+           from != to),
+  vertices = nodes_activity_simplified
+)
+
+# plot(graph_activity, 
+#      edge.arrow.size = 0.2,
+#      edge.width = E(graph_activity)$weight / 1000)
+```
+
+
+```{r}
+set.seed(123)
+ggraph(graph_activity_simplified, layout = 'fr') +
+  geom_edge_link0(aes(width = weight/1000), 
+                  # arrow = arrow(length = unit(2, 'mm')), 
+                  # end_cap = circle(3, 'mm'),
+                  alpha = 0.6,
+                  color = "gray50") +
+  geom_node_point(aes(size = size, col = name)) +
+  geom_node_label(aes(label = name, col = name), 
+                  repel = TRUE, 
+                  size = 3.2) +
+  scale_edge_width(range = c(0.2, 5), guide = "none") +
+  theme_void() +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c(
+    "cleaning" = "#268bd2", "cooking" = "#b58900", "eating" = "#cb4b16",
+    "exploring" = "#dc322f", "looking at device" = "#d33682", "playing" = "#6c71c4",
+    "reading" = "#2aa198", "watching tv" = "#859900", "walking" = "#2eb354", "sitting" = "#2e49b3"
+  ))
+```
+
+
+
