@@ -1,0 +1,411 @@
+```{r}
+library(tidyverse)
+library(here)
+library(glue)
+library(tidytext)
+```
+
+```{r}
+ann_1 <- read.csv(here("data/completed_annotations/DD_list_final.csv"))
+ann_2 <- read.csv(here("data/completed_annotations/JY_list_final.csv"))
+ann_3 <- read.csv(here("data/completed_annotations/VM_list_final.csv"))
+df_cleaned <- read.csv(here("data/all_contexts_cleaned.csv"))
+```
+
+```{r}
+colnames(ann_1)
+```
+
+```{r}
+colnames(df_cleaned)
+```
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(here)
+library(glue)
+library(tidytext)
+library(irr)  # for inter-rater reliability
+
+# Read the data (assuming these are already loaded)
+# ann_1 <- read.csv(here("data/completed_annotations/DD_list_final.csv"))
+# ann_2 <- read.csv(here("data/completed_annotations/JY_list_final.csv"))
+# ann_3 <- read.csv(here("data/completed_annotations/VM_list_final.csv"))
+# df_cleaned <- read.csv(here("data/all_contexts_cleaned.csv"))
+
+# Step 1: Add annotator ID and combine all annotation files (including Other columns)
+ann_1_labeled <- ann_1 %>%
+  mutate(annotator = "DD") %>%
+  select(video_id, Location, Activity, Other.locations, Other.activities, 
+         Video.description.accuracy..1.5., annotator)
+
+ann_2_labeled <- ann_2 %>%
+  mutate(annotator = "JY") %>%
+  select(video_id, Location, Activity, Other.locations, Other.activities, 
+         Video.description.accuracy..1.5., annotator)
+
+ann_3_labeled <- ann_3 %>%
+  mutate(annotator = "VM") %>%
+  select(video_id, Location, Activity, Other.locations, Other.activities, 
+         Video.description.accuracy..1.5., annotator)
+
+# Combine all annotations
+all_annotations <- bind_rows(ann_1_labeled, ann_2_labeled, ann_3_labeled)
+
+# Step 2: Filter for rows where Video.description.accuracy is not empty for all three annotators
+complete_ratings <- all_annotations %>%
+  filter(!is.na(Video.description.accuracy..1.5.) & 
+         Video.description.accuracy..1.5. != "" &
+         !is.null(Video.description.accuracy..1.5.)) %>%
+  group_by(video_id) %>%
+  filter(n() == 3) %>%  # Only keep video_ids that have all 3 annotations
+  ungroup()
+
+# Get the video_ids that have complete ratings
+complete_video_ids <- unique(complete_ratings$video_id)
+clean_video_ids <- sub("^\\d+_", "", complete_video_ids)
+
+print(paste("Number of videos with complete ratings from all three annotators:", length(clean_video_ids)))
+
+# Step 3: Find matching rows in df_cleaned
+df_matched <- df_cleaned %>%
+  filter(video_id %in% clean_video_ids)
+
+print(paste("Number of rows in df_cleaned matching complete annotations:", nrow(df_matched)))
+
+# Step 4: Prepare data for inter-rater reliability analysis
+# Pivot wider to have one row per video_id with columns for each annotator
+location_wide <- complete_ratings %>%
+  select(video_id, annotator, Location) %>%
+  pivot_wider(names_from = annotator, values_from = Location, names_prefix = "Location_")
+
+activity_wide <- complete_ratings %>%
+  select(video_id, annotator, Activity) %>%
+  pivot_wider(names_from = annotator, values_from = Activity, names_prefix = "Activity_")
+
+# Video description accuracy ratings
+accuracy_wide <- complete_ratings %>%
+  select(video_id, annotator, Video.description.accuracy..1.5.) %>%
+  mutate(Video.description.accuracy..1.5. = as.numeric(Video.description.accuracy..1.5.)) %>%
+  pivot_wider(names_from = annotator, values_from = Video.description.accuracy..1.5., 
+              names_prefix = "Accuracy_")
+
+# Step 5: Calculate Inter-Rater Reliability for Location and Activity
+print("=== INTER-RATER RELIABILITY ANALYSIS ===")
+
+# For Location
+if(all(c("Location_DD", "Location_JY", "Location_VM") %in% colnames(location_wide))) {
+  location_matrix <- location_wide %>%
+    select(Location_DD, Location_JY, Location_VM) %>%
+    as.matrix()
+  
+  # Calculate Fleiss' Kappa for Location (categorical data)
+    activity_kappa <- kappa2(activity_matrix[,1:2])
+  print(paste("Activity - Cohen's Kappa (DD vs JY):", round(activity_kappa$value, 3)))
+  activity_kappa_2 <- kappa2(activity_matrix[,c(1,3)])
+  print(paste("Activity - Cohen's Kappa (DD vs VM):", round(activity_kappa_2$value, 3)))
+  activity_kappa_3 <- kappa2(activity_matrix[,2:3])
+  print(paste("Activity - Cohen's Kappa (VM vs JY):", round(activity_kappa_3$value, 3)))
+
+  # Calculate agreement percentages
+  location_agreement_DD_JY <- mean(location_matrix[,1] == location_matrix[,2], na.rm = TRUE)
+  location_agreement_DD_VM <- mean(location_matrix[,1] == location_matrix[,3], na.rm = TRUE)
+  location_agreement_JY_VM <- mean(location_matrix[,2] == location_matrix[,3], na.rm = TRUE)
+  print(paste("Location Agreement DD-JY:", round(location_agreement_DD_JY * 100, 1), "%"))
+  print(paste("Location Agreement DD-VM:", round(location_agreement_DD_VM * 100, 1), "%"))
+  print(paste("Location Agreement JY-VM:", round(location_agreement_JY_VM * 100, 1), "%"))
+}
+
+# For Activity
+if(all(c("Activity_DD", "Activity_JY", "Activity_VM") %in% colnames(activity_wide))) {
+  activity_matrix <- activity_wide %>%
+    select(Activity_DD, Activity_JY, Activity_VM) %>%
+    as.matrix()
+  
+  # Calculate Fleiss' Kappa for Activity
+  activity_kappa <- kappa2(activity_matrix[,1:2])
+  print(paste("Activity - Cohen's Kappa (DD vs JY):", round(activity_kappa$value, 3)))
+  
+  # Calculate agreement percentages
+  activity_agreement_DD_JY <- mean(activity_matrix[,1] == activity_matrix[,2], na.rm = TRUE)
+  activity_agreement_DD_VM <- mean(activity_matrix[,1] == activity_matrix[,3], na.rm = TRUE)
+  activity_agreement_JY_VM <- mean(activity_matrix[,2] == activity_matrix[,3], na.rm = TRUE)
+  
+  print(paste("Activity Agreement DD-JY:", round(activity_agreement_DD_JY * 100, 1), "%"))
+  print(paste("Activity Agreement DD-VM:", round(activity_agreement_DD_VM * 100, 1), "%"))
+  print(paste("Activity Agreement JY-VM:", round(activity_agreement_JY_VM * 100, 1), "%"))
+}
+
+# Step 5b: Video Description Accuracy Analysis
+print("\n=== VIDEO DESCRIPTION ACCURACY RATINGS ===")
+
+if(all(c("Accuracy_DD", "Accuracy_JY", "Accuracy_VM") %in% colnames(accuracy_wide))) {
+  accuracy_matrix <- accuracy_wide %>%
+    select(Accuracy_DD, Accuracy_JY, Accuracy_VM) %>%
+    as.matrix()
+
+  # Calculate means and standard deviations for each annotator
+  for(annotator in c("DD", "JY", "VM")) {
+    col_name <- paste0("Accuracy_", annotator)
+    ratings <- accuracy_wide[[col_name]]
+    mean_rating <- mean(ratings, na.rm = TRUE)
+    sd_rating <- sd(ratings, na.rm = TRUE)
+    print(paste(paste0("Annotator ", annotator, " - Mean:"), round(mean_rating, 2), 
+                "SD:", round(sd_rating, 2)))
+  }
+  
+  # Overall statistics across all ratings
+  all_ratings <- c(accuracy_matrix)
+  all_ratings <- all_ratings[!is.na(all_ratings)]
+  print(paste("Overall Mean Rating:", round(mean(all_ratings), 2)))
+  print(paste("Overall SD Rating:", round(sd(all_ratings), 2)))
+}
+
+# Step 6: Functions for inter-rater reliability calculations
+
+# Function to calculate 3-way agreement percentage
+calculate_three_way_agreement <- function(col1, col2, col3) {
+  # All three agree
+  all_three_agree <- mean(col1 == col2 & col2 == col3, na.rm = TRUE)
+  # At least two agree (majority)
+  at_least_two_agree <- mean(
+    (col1 == col2) | (col1 == col3) | (col2 == col3), 
+    na.rm = TRUE
+  )
+  return(list(all_three = all_three_agree, at_least_two = at_least_two_agree))
+}
+
+
+# Function to calculate set-based agreement (for expanded annotations)
+calculate_set_agreement <- function(set1_list, set2_list) {
+  if(length(set1_list) != length(set2_list)) {
+    return(NA)
+  }
+  
+  agreements <- numeric(length(set1_list))
+  
+  for(i in seq_along(set1_list)) {
+    set1 <- set1_list[[i]]
+    set2 <- set2_list[[i]]
+    
+    # Check if there's any overlap between the sets
+    if(length(intersect(set1, set2)) > 0) {
+      agreements[i] <- 1
+    } else {
+      agreements[i] <- 0
+    }
+  }
+  
+  return(mean(agreements, na.rm = TRUE))
+}
+
+# Function to calculate 3-way set agreement
+calculate_three_way_set_agreement <- function(set1_list, set2_list, set3_list) {
+  if(length(set1_list) != length(set2_list) || length(set2_list) != length(set3_list)) {
+    return(list(all_three = NA, at_least_two = NA))
+  }
+  
+  all_three_agree <- numeric(length(set1_list))
+  at_least_two_agree <- numeric(length(set1_list))
+  
+  for(i in seq_along(set1_list)) {
+    set1 <- set1_list[[i]]
+    set2 <- set2_list[[i]]
+    set3 <- set3_list[[i]]
+    
+    # Check pairwise overlaps
+    overlap_12 <- length(intersect(set1, set2)) > 0
+    overlap_13 <- length(intersect(set1, set3)) > 0
+    overlap_23 <- length(intersect(set2, set3)) > 0
+    
+    # All three have some common element
+    common_all <- length(intersect(intersect(set1, set2), set3)) > 0
+    all_three_agree[i] <- as.numeric(common_all)
+    
+    # At least two pairs have overlap
+    at_least_two_agree[i] <- as.numeric(overlap_12 | overlap_13 | overlap_23)
+  }
+  
+  return(list(
+    all_three = mean(all_three_agree, na.rm = TRUE),
+    at_least_two = mean(at_least_two_agree, na.rm = TRUE)
+  ))
+}
+
+# Function to expand annotations with "Other" columns
+expand_annotations <- function(primary_col, other_col) {
+  # Handle cases where other_col might be NA or empty
+  other_col <- ifelse(is.na(other_col) | other_col == "", "", other_col)
+  
+  # Split other_col by comma and combine with primary
+  other_items <- str_split(other_col, ",\\s*") |>
+      lapply(str_trim)
+  
+  # Create expanded list
+  expanded <- map2(primary_col, other_items, function(primary, others) {
+    if(length(others) == 1 && others == "") {
+      return(primary)
+    } else {
+      return(c(primary, others))
+    }
+  })
+  
+  return(expanded)
+}
+
+# Step 8: Calculate F-scores comparing annotations with df_cleaned
+print("\n=== F-SCORE ANALYSIS ===")
+
+# Function to calculate F-score for sets (allowing multiple correct answers)
+calculate_f_score_sets <- function(predicted_list, actual) {
+  if(length(predicted_list) == 0 || length(actual) == 0) {
+    return(list(precision = NA, recall = NA, f1 = NA))
+  }
+  
+  # Convert actual to character
+  actual <- as.character(actual)
+  
+  # Remove NA values
+  valid_indices <- !is.na(actual)
+  predicted_list <- predicted_list[valid_indices]
+  actual <- actual[valid_indices]
+  
+  if(length(predicted_list) == 0 || length(actual) == 0) {
+    return(list(precision = NA, recall = NA, f1 = NA))
+  }
+  
+  # Calculate precision and recall for each prediction
+  precisions <- numeric(length(predicted_list))
+  recalls <- numeric(length(predicted_list))
+  
+  for(i in seq_along(predicted_list)) {
+    predicted_set <- predicted_list[[i]]
+    true_label <- actual[i]
+    
+    if(length(predicted_set) == 0) {
+      precisions[i] <- 0
+      recalls[i] <- 0
+    } else {
+      # Precision: is the true label in the predicted set?
+      precisions[i] <- ifelse(true_label %in% predicted_set, 1, 0)
+      # Recall: for single true labels, this is the same as precision
+      recalls[i] <- precisions[i]
+    }
+  }
+  
+  avg_precision <- mean(precisions, na.rm = TRUE)
+  avg_recall <- mean(recalls, na.rm = TRUE)
+  avg_f1 <- ifelse(avg_precision + avg_recall == 0, 0, 
+                   2 * avg_precision * avg_recall / (avg_precision + avg_recall))
+  
+  return(list(precision = avg_precision, recall = avg_recall, f1 = avg_f1))
+}
+
+# Standard F-score function (from original code)
+calculate_f_score <- function(predicted, actual) {
+  # Convert to character to ensure proper comparison
+  predicted <- as.character(predicted)
+  actual <- as.character(actual)
+  
+  # Remove NA values
+  valid_indices <- !is.na(predicted) & !is.na(actual)
+  predicted <- predicted[valid_indices]
+  actual <- actual[valid_indices]
+  
+  if(length(predicted) == 0 || length(actual) == 0) {
+    return(list(precision = NA, recall = NA, f1 = NA))
+  }
+  
+  # Get unique labels
+  all_labels <- unique(c(predicted, actual))
+  
+  # Initialize metrics
+  precision_sum <- 0
+  recall_sum <- 0
+  f1_sum <- 0
+  n_labels <- 0
+  
+  for(label in all_labels) {
+    tp <- sum(predicted == label & actual == label)
+    fp <- sum(predicted == label & actual != label)
+    fn <- sum(predicted != label & actual == label)
+    
+    precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+    recall <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+    f1 <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
+    
+    if(!is.na(f1)) {
+      precision_sum <- precision_sum + precision
+      recall_sum <- recall_sum + recall
+      f1_sum <- f1_sum + f1
+      n_labels <- n_labels + 1
+    }
+  }
+  
+  # Macro-averaged metrics
+  avg_precision <- precision_sum / n_labels
+  avg_recall <- recall_sum / n_labels
+  avg_f1 <- f1_sum / n_labels
+  
+  return(list(precision = avg_precision, recall = avg_recall, f1 = avg_f1))
+}
+
+# Merge annotations with df_cleaned for comparison
+comparison_data <- complete_ratings %>%
+  mutate(cleaned_video_id = sub("^\\d+_", "", video_id)) %>%
+  left_join(df_cleaned %>% select(video_id, Location, Activity), 
+            by = c("cleaned_video_id" = "video_id"), suffix = c("_annotation", "_cleaned"))
+
+# Create expanded annotations including "Other" columns
+comparison_data_expanded <- comparison_data %>% 
+  mutate(
+    expanded_locations = expand_annotations(Location_annotation, Other.locations),
+    expanded_activities = expand_annotations(Activity_annotation, Other.activities)
+  )
+
+
+# Calculate F-scores for each annotator vs df_cleaned
+annotators <- c("DD", "JY", "VM")
+
+print("--- PRIMARY ANNOTATIONS ONLY ---")
+for(annotator in annotators) {
+  annotator_data <- comparison_data %>% filter(annotator == !!annotator)
+  
+  print(paste("\n--- Annotator:", annotator, "---"))
+  
+  # Location F-score
+  location_f_score <- calculate_f_score(annotator_data$Location_annotation, 
+                                      annotator_data$Location_cleaned)
+  print(paste("Location F1-Score:", round(location_f_score$f1, 3)))
+  print(paste("Location Precision:", round(location_f_score$precision, 3)))
+  print(paste("Location Recall:", round(location_f_score$recall, 3)))
+  
+  # Activity F-score
+  activity_f_score <- calculate_f_score(annotator_data$Activity_annotation, 
+                                       annotator_data$Activity_cleaned)
+  print(paste("Activity F1-Score:", round(activity_f_score$f1, 3)))
+  print(paste("Activity Precision:", round(activity_f_score$precision, 3)))
+  print(paste("Activity Recall:", round(activity_f_score$recall, 3)))
+}
+
+print("\n--- INCLUDING 'OTHER' ANNOTATIONS ---")
+for(annotator in annotators) {
+  annotator_data <- comparison_data_expanded %>% filter(annotator == !!annotator)
+  
+  print(paste("\n--- Annotator:", annotator, "(with Others) ---"))
+  
+  # Location F-score with expanded annotations
+  location_f_score_expanded <- calculate_f_score_sets(annotator_data$expanded_locations, 
+                                                    annotator_data$Location_cleaned)
+  print(paste("Location Precision (expanded):", round(location_f_score_expanded$precision, 3)))
+
+  # Activity F-score with expanded annotations
+  activity_f_score_expanded <- calculate_f_score_sets(annotator_data$expanded_activities, 
+                                                    annotator_data$Activity_cleaned)
+  print(paste("Activity Precision (expanded):", round(activity_f_score_expanded$precision, 3)))
+}
+```
+
+```{r}
+```

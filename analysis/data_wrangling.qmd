@@ -11,10 +11,12 @@ df <- read.csv(here("data", "all_contexts.csv"))
 
 ```{r}
 df_cleaned <- df |>
+  filter(Location != "") |>
   mutate(superseded_gcp_name_feb25 = sub("_processed.*", "", video_id),
          chunk_num = as.integer(sub(".*_(\\d+)\\.mp4", "\\1", basename(video_path))),
     start_time = chunk_num * 10,
-    end_time = start_time + 10) |>
+    end_time = start_time + 10,
+    chunk_num = chunk_num + 1) |>
   mutate(locations_avg = rollapply(Location, width = 3,
                                 FUN = \(x) {
                                   ux <- unique(x)

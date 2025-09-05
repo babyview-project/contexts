@@ -2,6 +2,11 @@
 library(tidyverse)
 library(here)
 library(glue)
+source("helpers.R")
+```
+```{r}
+df <- read.csv(here("data", "all_contexts.csv")) |> select(-Video.description)
+write.csv(df, here("data", "all_contexts.csv"))
 ```
 
 # TODO:
@@ -11,6 +16,12 @@ library(glue)
 
 ```{r}
 df_cleaned <- read.csv(here("data", "all_contexts_cleaned.csv"))
+recordings <- read_csv(here("data/recordings_processed.csv")) |> select(-start_time)
+df_cleaned_seconds <- df_cleaned |>
+  rowwise() |>
+  mutate(frame_num = list(seq(start_time+1, end_time))) |>
+  unnest(frame_num) |>
+  filter(Activity != "")
 ```
 
 # Combine annotations
@@ -92,5 +103,1338 @@ make_kosie_plot <- function(full_annotations) {
 ## just random ids for now
 ```{r}
 random_video_id <- sample(unique(df_cleaned$superseded_gcp_name_feb25), 1)
-make_kosie_plot(bind_annotations(random_video_id, threshold = 10))
+kosie_plot <- make_kosie_plot(bind_annotations(random_video_id, threshold = 10))
+print(kosie_plot)
+ggsave(here("data/kosie_plot.png"), kosie_plot)
+# illustrate some variability
+```
+# time of day
+```{r}
+df_with_time <- df_cleaned %>%
+  left_join(recordings) %>%
+  mutate(
+    # Extract time component
+    time_component = format(as.POSIXct(date_time), "%H:%M:%S"),
+    
+    # Create time-of-day buckets (excluding 00:00:00)
+    time_bucket = case_when(
+      time_component == "00:00:00" ~ NA_character_,  # Ignore midnight times
+      time_component >= "05:00:00" & time_component < "10:00:00" ~ "Early Morning (5-10am)",
+      time_component >= "10:00:00" & time_component < "14:00:00" ~ "Late Morning (10am-2pm)",
+      time_component >= "14:00:00" & time_component < "18:00:00" ~ "Afternoon (2-6pm)",
+      time_component >= "18:00:00" & time_component < "22:00:00" ~ "Evening (6-10pm)",
+      TRUE ~ NA_character_ #"Night (10pm-5am)" only around 5 hours of data here
+    )
+  ) %>%
+  # Remove rows where time is 00:00:00
+  filter(!is.na(time_bucket))
+
+# Calculate proportions within each time bucket
+props_data <- bind_rows(
+  # Activity proportions within each time bucket
+  df_with_time %>%
+    group_by(time_bucket) %>%
+    count(Activity) %>%
+    mutate(prop = n / sum(n),
+           hours = sum(n) / 360,  # Calculate hours in this time bucket
+           variable = "Activity",
+           category = Activity,
+           facet_label = paste0(time_bucket, "\n(", round(hours, 1), " hrs)")) %>%
+    ungroup(),
+  
+  # Location proportions within each time bucket
+  df_with_time %>%
+    group_by(time_bucket) %>%
+    count(Location) %>%
+    mutate(prop = n / sum(n),
+           hours = sum(n) / 360,  # Calculate hours in this time bucket
+           variable = "Location",
+           category = Location,
+           facet_label = paste0(time_bucket, "\n(", round(hours, 1), " hrs)")) %>%
+    ungroup()
+)
+
+# Reorder categories within each time bucket and variable
+props_data <- props_data %>%
+  group_by(time_bucket, variable) %>%
+  mutate(category = reorder_within(category, -prop, paste(time_bucket, variable))) %>%
+  ungroup()
+
+# Create the plot
+ggplot(props_data, aes(x = category, y = prop, fill = variable)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(title = "Activity and Location Proportions by Time of Day",
+       x = NULL,
+       y = "Proportion") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(size = 9)) +
+  facet_grid(variable ~ facet_label, scales = "free_x") +
+  scale_x_reordered()
+```
+```{r}
+# First, create 2-hour time buckets
+df_with_time <- df_cleaned %>%
+  left_join(recordings) |>
+  mutate(
+    # Extract time component
+    time_component = format(as.POSIXct(date_time), "%H:%M:%S"),
+    hour = as.numeric(format(as.POSIXct(date_time), "%H"))
+  ) %>%
+  # Remove rows where time is 00:00:00
+  filter(time_component != "00:00:00") %>%
+    filter(!is.na(time_component)) |>
+   mutate(
+    time_bucket = case_when(
+      hour >= 5 & hour < 21 ~ {
+        start_hour <- ((hour - 5) %/% 2) * 2 + 5
+        end_hour <- start_hour + 2
+        start_label <- ifelse(start_hour < 12, paste0(start_hour, "am"), 
+                             ifelse(start_hour == 12, "12pm", paste0(start_hour - 12, "pm")))
+        end_label <- ifelse(end_hour < 12, paste0(end_hour, "am"), 
+                           ifelse(end_hour == 12, "12pm", paste0(end_hour - 12, "pm")))
+        paste0(start_label, "-", end_label)
+      },
+      TRUE ~ "9pm-5am"
+    ),
+    time_bucket = factor(
+      time_bucket,
+      levels = c("5am-7am", "7am-9am", "9am-11am", "11am-1pm", 
+                 "1pm-3pm", "3pm-5pm", "5pm-7pm", "7pm-9pm", 
+                 "9pm-5am")
+    )
+  ) %>%
+  filter(!is.na(time_bucket))
+
+
+# Find top 6 activities overall
+#top_activities <- df_with_time %>%
+#  count(Activity, sort = TRUE) %>%
+ # slice_head(n = 6) %>%
+#  pull(Activity)
+
+# Create activity data with "Other" category
+activity_time_data <- df_with_time %>%
+  mutate(
+    Activity_grouped = if_else(Activity %in% top_activities, Activity, "other")
+  ) %>%
+  group_by(time_bucket, Activity_grouped) %>%
+  summarise(n = n(), activity_hours = n/360, .groups = "drop") %>%
+  group_by(time_bucket) %>%
+  mutate(
+    prop = n / sum(n),
+    total_hours = sum(n) / 360
+  ) %>%
+  ungroup() |>
+  filter(total_hours > 25)
+
+# Create the line plot
+ggplot(activity_time_data |> filter(!(Activity_grouped %in% c("other"))), aes(x = time_bucket, y = prop, color = Activity_grouped, group = Activity_grouped)) +
+  geom_line(size = 1) +
+  geom_point(aes(size = activity_hours), alpha=0.5) +
+  scale_y_continuous() +
+  labs(title = "Activity Patterns Throughout the Day (2-hour buckets)",
+       subtitle = "Top 6 activities shown",
+       x = "Time of Day",
+       y = "Proportion of Activities",
+       color = "Activity") +
+  theme_classic() +
+  theme(legend.position = "right") +
+  guides(size=guide_legend(title="Hours of activity"))
+# exclude time bins that have less than 5 hours of data
+```
+## sustained
+```{r}
+df_with_time_sustained <- df_sustained_activities |> filter(duration_seconds > 60) |> 
+  left_join(df_with_time 
+                           |> distinct(time_bucket, video_id=superseded_gcp_name_feb25)) |> 
+  filter(!is.na(time_bucket))
+  
+  
+  activity_time_data_sustained <- df_with_time_sustained %>%
+  mutate(
+    Activity_grouped = if_else(Activity %in% top_activities, Activity, "other")
+  ) %>%
+  group_by(time_bucket, Activity_grouped) %>%
+  summarise(n = sum(n_chunks), activity_hours = n/360, .groups = "drop") %>%
+  group_by(time_bucket) %>%
+  mutate(
+    prop = n / sum(n),
+    total_hours = sum(n) / 360
+  ) %>%
+  ungroup() |>
+  filter(total_hours > 25)
+
+# Create the line plot
+ggplot(activity_time_data_sustained |> filter(!(Activity_grouped %in% c("other"))), aes(x = time_bucket, y = prop, color = Activity_grouped, group = Activity_grouped)) +
+  geom_line(size = 1) +
+  geom_point(aes(size = activity_hours), alpha=0.5) +
+  scale_y_continuous() +
+  labs(title = "Sustained activities throughout the day (2-hour buckets)",
+       subtitle = "Top 6 activities shown",
+       x = "Time of Day",
+       y = "Proportion of Activities",
+       color = "Activity") +
+  theme_classic() +
+  theme(legend.position = "right") +
+  guides(size=guide_legend(title="Hours of activity"))
+```
+
+## subject-level 
+```{r}
+subject_time_facet_plot <- function(df_with_time, 
+                                     title = "Activity patterns throughout the day by subject",
+                                     y = "Proportion of activity detections",
+                                     min_total_hours = 20) {
+  
+  # Get total hours per subject across all time buckets
+  total_hours <- df_with_time %>%
+    group_by(subject_id) %>%
+    summarize(subject_total_hours = n() / 360, .groups = "drop")  # Convert to hours (assuming 10-second intervals)
+  
+  # Create time-based activity data at subject level
+  activity_time_data <- df_with_time %>%
+    mutate(
+      Activity_grouped = if_else(Activity %in% top_activities, Activity, "other")
+    ) %>%
+    group_by(subject_id, time_bucket, Activity_grouped) %>%
+    summarise(n = n(), activity_hours = n/360, .groups = "drop") %>%
+    group_by(subject_id, time_bucket) %>%
+    mutate(
+      prop = n / sum(n),
+      bucket_total_hours = sum(n) / 360
+    ) %>%
+    ungroup() %>%
+    rename(Activity = Activity_grouped) %>%
+    left_join(total_hours, by = "subject_id") %>%
+    # Only keep subjects with sufficient data
+    filter(subject_total_hours > min_total_hours) %>%
+    # Create subject labels with total hours
+    mutate(subj_num = dense_rank(desc(subject_total_hours))) %>%
+    arrange(subj_num) %>%
+    mutate(
+      subject_label = paste0(
+        "Subj ", subj_num,
+        " | total hours: ", round(subject_total_hours, 1)
+      ),
+      # Lock facet order by ranking
+      subject_label = factor(subject_label, levels = unique(subject_label))
+    ) %>%
+    # Filter out "other" category for cleaner visualization
+    filter(Activity != "other" & time_bucket != "9pm-5am" & bucket_total_hours > 2.5) |>
+    group_by(subject_id) |>
+    filter(n_distinct(time_bucket) > 3)
+  
+  # Create the plot
+  ggplot(activity_time_data, aes(x = time_bucket, y = prop, color = Activity, group = Activity)) +
+    geom_line(alpha = 0.7, size = 0.8) +
+    geom_point(aes(size = activity_hours), alpha = 0.6) +
+    facet_wrap(~ subject_label) +
+    scale_y_continuous() +
+    labs(
+      title = title,
+      x = "Time of Day",
+      y = y,
+      color = "Activity",
+      size = "Hours per activity\nwithin time bucket"
+    ) +
+    theme_classic() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "right",
+      strip.text = element_text(size = 8)
+    ) +
+    guides(
+      color = guide_legend(override.aes = list(size = 3, alpha = 1)),
+      size = guide_legend(title = "Hours per activity\nwithin time bucket")
+    )
+}
+subject_time <- subject_time_facet_plot(df_with_time)
+
+ggsave(here("figures/subject_time.png"), subject_time, width=10)
+```
+
+## activity-level
+```{r}
+activity_time_facet_plot <- function(df_with_time, 
+                                     title = "Subject activity patterns throughout the day by activity type",
+                                     y = "Proportion of time bucket",
+                                     min_total_hours = 20) {
+  
+  # Get total hours per subject across all time buckets
+  total_hours <- df_with_time %>%
+    group_by(subject_id) %>%
+    summarize(subject_total_hours = n() / 360, .groups = "drop")  # Convert to hours (assuming 10-second intervals)
+  
+  # Create time-based activity data at subject level
+  activity_time_data <- df_with_time %>%
+    mutate(
+      Activity_grouped = if_else(Activity %in% top_activities, Activity, "other")
+    ) %>%
+    group_by(subject_id, time_bucket, Activity_grouped) %>%
+    summarise(n = n(), activity_hours = n/360, .groups = "drop") %>%
+    group_by(subject_id, time_bucket) %>%
+    mutate(
+      prop = n / sum(n),
+      bucket_total_hours = sum(n) / 360
+    ) %>%
+    ungroup() %>%
+    rename(Activity = Activity_grouped) %>%
+    left_join(total_hours, by = "subject_id") %>%
+    # Only keep subjects with sufficient data
+    filter(subject_total_hours > min_total_hours) %>%
+    # Create subject labels with total hours
+    mutate(subj_num = dense_rank(desc(subject_total_hours))) %>%
+    arrange(subj_num) %>%
+    mutate(
+      subject_label = paste0("Subj ", subj_num, " (", round(subject_total_hours, 1), "h)")
+    ) %>%
+    # Filter out "other" category and low-data periods
+    filter(Activity != "other" & time_bucket != "9pm-5am" & bucket_total_hours > 2.5) %>%
+    group_by(subject_id) %>%
+    filter(n_distinct(time_bucket) > 3) %>%
+    ungroup()
+  
+  # Create the plot
+  ggplot(activity_time_data, aes(x = time_bucket, y = prop, color = subject_total_hours, group = subject_id)) +
+    geom_line(alpha = 0.8, size = 0.9) +
+    geom_point(aes(size = activity_hours), alpha = 0.7) +
+    facet_wrap(~ Activity, scales = "free_y") +
+    scale_color_viridis_c(name = "Total hours\nof data", option = "E", trans = "log10") +
+    scale_y_continuous() +
+    labs(
+      title = title,
+      x = "Time of Day",
+      y = y,
+      size = "Hours per activity\nwithin time bucket"
+    ) +
+    theme_classic() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "right",
+      strip.text = element_text(size = 10, face = "bold"),
+      legend.box = "vertical"
+    ) +
+    guides(
+      color = guide_colorbar(title = "Total hours\nof data provided by participant"),
+      size = "none"
+    )
+}
+
+# Generate the plot
+activity_time <- activity_time_facet_plot(df_with_time)
+activity_time
+ggsave(here("figures/activity_time.png"), activity_time, width = 12, height = 8)
+```
+
+
+# sustained activities and co-occurrences
+```{r}
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+library(viridis)
+library(scales)
+
+# Assuming df_cleaned is already loaded with columns:
+# start_time, end_time, Activity, Location, superseded_gcp_name_feb25 (video_id), subject_id
+
+# =============================================================================
+# STEP 1: Combine contiguous chunks into sustained episodes
+# =============================================================================
+
+df_sustained <- df_cleaned %>%
+  left_join(recordings) %>%
+  mutate(
+    duration_seconds = end_time - start_time,
+    video_id = superseded_gcp_name_feb25
+  ) %>%
+  arrange(subject_id, video_id, start_time) %>%
+  # Create groups for contiguous episodes with same activity and location
+  group_by(subject_id, video_id) %>%
+  mutate(
+    # Check if current row is different from previous row
+    activity_change = Activity != lag(Activity, default = ""),
+    location_change = Location != lag(Location, default = ""),
+    # Check if there's a temporal gap (assuming consecutive 10-second chunks)
+    time_gap = start_time != lag(end_time, default = first(start_time)),
+    # Any change triggers a new episode
+    episode_change = activity_change | location_change | time_gap,
+    # Create episode ID within each video
+    episode_id = cumsum(episode_change)
+  ) %>%
+  # Now group by episode and combine chunks
+  group_by(subject_id, video_id, episode_id, Activity, Location) %>%
+  summarise(
+    start_time = min(start_time),
+    end_time = max(end_time),
+    n_chunks = n(),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    duration_seconds = end_time - start_time,
+    duration_minutes = duration_seconds / 60,
+    # Create unique episode identifier across all data
+    global_episode_id = paste(subject_id, video_id, episode_id, sep = "_")
+  ) %>%
+  filter(duration_seconds > 0) %>%
+  arrange(subject_id, video_id, start_time)
+
+
+df_sustained_activities <- df_cleaned %>%
+  left_join(recordings) |>
+  mutate(
+    duration_seconds = end_time - start_time,
+    video_id = superseded_gcp_name_feb25
+  ) %>%
+  arrange(subject_id, video_id, start_time) %>%
+  # Create groups for contiguous episodes with same activity and location
+  group_by(subject_id, video_id) %>%
+  mutate(
+    # Check if current row is different from previous row
+    activity_change = Activity != lag(Activity, default = ""),
+    # Check if there's a temporal gap (assuming consecutive 10-second chunks)
+    time_gap = start_time != lag(end_time, default = first(start_time)),
+    # Any change triggers a new episode
+    episode_change = activity_change | time_gap,
+    # Create episode ID within each video
+    episode_id = cumsum(episode_change)
+  ) %>%
+  # Now group by episode and combine chunks
+  group_by(subject_id, video_id, episode_id, Activity) %>%
+  summarise(
+    start_time = min(start_time),
+    end_time = max(end_time),
+    n_chunks = n(),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    duration_seconds = end_time - start_time,
+    duration_minutes = duration_seconds / 60,
+    # Create unique episode identifier across all data
+    global_episode_id = paste(subject_id, video_id, episode_id, sep = "_")
+  ) %>%
+  filter(duration_seconds > 0) %>%
+  arrange(subject_id, video_id, start_time)
+
+print(paste("Original chunks:", nrow(df_cleaned)))
+print(paste("Combined into sustained episodes:", nrow(df_sustained)))
+print(paste("Total duration range:", round(min(df_sustained$duration_seconds, na.rm = TRUE), 2), 
+            "to", round(max(df_sustained$duration_seconds, na.rm = TRUE), 2), "seconds"))
+print(paste("Mean episode duration:", round(mean(df_sustained$duration_seconds, na.rm = TRUE), 2), "seconds"))
+
+# =============================================================================
+# PLOT 1: Co-occurrence Heatmaps
+# =============================================================================
+
+# Activity co-occurrences within videos (create pairwise matrix)
+activity_pairs <- df_sustained_activities %>%
+  group_by(video_id) %>%
+  filter(n_distinct(Activity) > 1) %>%   # Only videos with multiple activities
+  summarise(activities = list(unique(Activity)), .groups = 'drop') %>%
+  rowwise() %>%
+  mutate(pairs = list(combn(activities, 2, simplify = FALSE))) %>%
+  unnest(pairs) %>%
+  mutate(
+    act_1 = map_chr(pairs, ~ .x[1]),
+    act_2 = map_chr(pairs, ~ .x[2])
+  ) %>%
+  # enforce an ordering so (A, B) == (B, A)
+  mutate(
+    activity1 = pmin(act_1, act_2),
+    activity2 = pmax(act_1, act_2)
+  ) %>%
+  count(activity1, activity2) %>%
+  # Add reverse pairs for symmetric matrix
+  bind_rows(
+    ., 
+    select(., activity1 = activity2, activity2 = activity1, n)
+  ) %>%
+  # Add diagonal (self-pairs)
+  bind_rows(
+    df_sustained %>% 
+      group_by(video_id, Activity) %>% 
+      slice(1) %>% 
+      ungroup() %>%
+      count(Activity) %>%
+      rename(activity1 = Activity) %>%
+      mutate(activity2 = activity1)
+  )
+
+diagonal_counts <- activity_pairs %>%
+  filter(activity1 == activity2) %>%
+  select(activity1, diag_n = n)
+
+# Join and compute proportion
+activity_pairs_prop <- activity_pairs %>%
+  left_join(diagonal_counts, by = c("activity1")) %>%
+  mutate(proportion = n / diag_n) %>%
+  select(activity1, activity2, proportion)
+
+activity_pairs_sustained <- df_sustained_activities %>%
+  filter(duration_seconds >= 60) %>%
+  group_by(video_id) %>%
+  filter(n_distinct(Activity) > 1) %>%   # Only videos with multiple activities
+  summarise(activities = list(unique(Activity)), .groups = 'drop') %>%
+  rowwise() %>%
+  mutate(pairs = list(combn(activities, 2, simplify = FALSE))) %>%
+  unnest(pairs) %>%
+  mutate(
+    act_1 = map_chr(pairs, ~ .x[1]),
+    act_2 = map_chr(pairs, ~ .x[2])
+  ) %>%
+  # enforce an ordering so (A, B) == (B, A)
+  mutate(
+    activity1 = pmin(act_1, act_2),
+    activity2 = pmax(act_1, act_2)
+  ) %>%
+  count(activity1, activity2) %>%
+  # Add reverse pairs for symmetric matrix
+  bind_rows(
+    ., 
+    select(., activity1 = activity2, activity2 = activity1, n)
+  ) %>%
+  # Add diagonal (self-pairs)
+  bind_rows(
+    df_sustained %>% 
+      group_by(video_id, Activity) %>% 
+      slice(1) %>% 
+      ungroup() %>%
+      count(Activity) %>%
+      rename(activity1 = Activity) %>%
+      mutate(activity2 = activity1)
+  )
+
+diagonal_counts_sustained <- activity_pairs_sustained %>%
+  filter(activity1 == activity2) %>%
+  select(activity1, diag_n = n)
+
+# Join and compute proportion
+activity_pairs_prop_sustained <- activity_pairs_sustained %>%
+  left_join(diagonal_counts_sustained, by = c("activity1")) %>%
+  mutate(proportion = n / diag_n) %>%
+  select(activity1, activity2, proportion)
+
+# Location co-occurrences within videos
+location_pairs <- df_sustained %>%
+  group_by(video_id) %>%
+  filter(n_distinct(Location) > 1) %>%  # Only videos with multiple locations
+  summarise(locations = list(unique(Location)), .groups = 'drop') %>%
+  rowwise() %>%
+  mutate(
+    pairs = list(combn(locations, 2, simplify = FALSE))
+  ) %>%
+  unnest(pairs) %>%
+  mutate(
+    location1 = map_chr(pairs, ~.x[1]),
+    location2 = map_chr(pairs, ~.x[2])
+  ) %>%
+  count(location1, location2) %>%
+  # Add reverse pairs for symmetric matrix
+  bind_rows(
+    ., 
+    select(., location1 = location2, location2 = location1, n)
+  ) %>%
+  # Add diagonal
+  bind_rows(
+    df_sustained %>% 
+      group_by(video_id, Location) %>% 
+      slice(1) %>% 
+      ungroup() %>%
+      count(Location) %>%
+      rename(location1 = Location) %>%
+      mutate(location2 = location1)
+  )
+
+# Activity-Location co-occurrence matrix
+all_activities <- unique(df_sustained$Activity)
+all_locations <- unique(df_sustained$Location)
+
+activity_location_matrix <- df_sustained %>%
+  distinct(video_id) %>%
+  crossing(
+    Activity = all_activities,
+    Location = all_locations
+  ) %>%
+  left_join(
+    df_sustained %>%
+      group_by(video_id, Activity, Location) %>%
+      summarise(present = 1, .groups = 'drop'),
+    by = c("video_id", "Activity", "Location")
+  ) %>%
+  replace_na(list(present = 0)) %>%
+  group_by(Activity, Location) %>%
+  summarise(n_videos = sum(present), .groups = 'drop')
+
+excluded_activities <- c() #"crying", "nursing", "gardening", "other")
+p1a <- ggplot( activity_pairs_prop %>%
+    filter(!activity1 %in% excluded_activities,
+           !activity2 %in% excluded_activities), aes(x = activity1, y = activity2, fill = proportion)) +
+  geom_tile(size = 0.5) +
+  scale_fill_viridis(name = "Proportion of videos with activity", trans = "sqrt", option="A", direction=-1, begin=0.3) +
+  labs(title = "Activity Co-occurrences Within Videos",
+       x = "Activity", y = "Activity") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5)
+  )
+# Print heatmaps separately for better readability
+print(p1a)
+```
+
+```{r}
+p1a <- ggplot( activity_pairs_prop_sustained %>%
+    filter(!activity1 %in% excluded_activities,
+           !activity2 %in% excluded_activities), aes(x = activity1, y = activity2, fill = proportion)) +
+  geom_tile(size = 0.5) +
+  scale_fill_viridis(name = "Proportion of videos with activity", trans = "sqrt", option="A", direction=-1, begin=0.3) +
+  labs(title = "Sustained Activity Co-occurrences Within Videos",
+       x = "Activity", y = "Activity") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5)
+  )
+# Print heatmaps separately for better readability
+print(p1a)
+
+```
+## surprisal
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(viridis)
+
+excluded_activities <- c() #c("crying", "nursing", "gardening", "other")
+
+# Get the correct activity ordering based on total counts from df_cleaned
+activity_totals <- df_cleaned %>%
+  filter(!Activity %in% excluded_activities) %>%
+  count(Activity, name = "total_count") %>%
+  arrange(desc(total_count))
+
+activity_order_custom <- c("playing", "reading", "drawing", "watching tv", "music time", "dancing",
+                           "eating", "drinking", "cleaning", "cooking")
+
+obs_matrix <- activity_pairs_prop %>%
+  filter(!activity1 %in% excluded_activities,
+         !activity2 %in% excluded_activities) %>%
+  pivot_wider(names_from = activity2, values_from = proportion, values_fill = 0) %>%
+  column_to_rownames("activity1") %>%
+  as.matrix()
+
+# Compute remaining activities once
+remaining_activities <- setdiff(rownames(obs_matrix), activity_order_custom)
+
+# Reorder rows and columns together
+obs_matrix <- obs_matrix[
+  c(activity_order_custom, remaining_activities[order(rowSums(obs_matrix[remaining_activities, ]), decreasing = FALSE)]),
+  c(activity_order_custom, remaining_activities[order(rowSums(obs_matrix[remaining_activities, ]), decreasing = FALSE)])
+]
+
+# mutual information
+# treat the data as graph not a matrix, network
+# Create off-diagonal matrix (exclude diagonal from all calculations)
+off_diag_matrix <- obs_matrix
+diag(off_diag_matrix) <- 0
+
+# Compute expected counts using only off-diagonal values
+row_tot <- rowSums(off_diag_matrix, na.rm = TRUE)
+col_tot <- colSums(off_diag_matrix, na.rm = TRUE)
+grand_tot <- sum(off_diag_matrix, na.rm = TRUE)
+
+expected <- outer(row_tot, col_tot) / grand_tot
+
+# Standardized residuals (only for off-diagonal elements)
+std_resid <- (off_diag_matrix - expected) / sqrt(pmax(expected, 1e-9))
+
+# Set diagonal to NA for visualization
+diag(std_resid) <- NA
+
+# Convert to long format
+std_resid_df <- as.data.frame(as.table(std_resid))
+colnames(std_resid_df) <- c("activity1", "activity2", "std_resid")
+
+# Remove diagonal entries (NA values) from the plot data
+std_resid_df <- std_resid_df %>%
+  #mutate(std_resid = ifelse(activity1 == activity2, 0, std_resid)) |>
+  filter(!is.na(std_resid))
+
+# Plot heatmap
+ggplot(std_resid_df, aes(x = activity1, y = activity2, fill = std_resid)) +
+  geom_tile(color = "white", size = 0.5) +
+  #scale_fill_viridis_c(option = "B", direction = -1, begin = 0.1) +
+  #scale_fill_brewer(palette="BrBG") +
+  #scale_fill_gradient2(mid="white", low=viridis_pal(option="A")[1], high=viridis_pal(option="A")[8])+
+  scale_fill_gradient2(high = "darkred", mid = "white", low = "darkblue") +
+  labs(title = "Standardized residuals of activity co-occurrence proportions",
+       x = "Original activity", y = "Co-occurring activity",
+       fill = "Standardized\nResidual") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "right",
+     panel.grid = element_blank()
+  )
+```
+
+five minute chunking
+## hierarchical clustering
+```{r}
+std_resid[is.na(std_resid)] <- 1
+
+hcluster <- hclust(as.dist(1-std_resid), method="average")
+hcluster$order
+colnames(std_resid)[hcluster$order]
+std_resid_df_new <- std_resid_df
+std_resid_df_new$activity1 <- fct_relevel(std_resid_df$activity1, colnames(std_resid)[hcluster$order])
+std_resid_df_new$activity2 <- fct_relevel(std_resid_df$activity2, colnames(std_resid)[hcluster$order])
+
+ggplot(std_resid_df_new, aes(x = activity1, y = activity2, fill = std_resid)) +
+  geom_tile(color = "white", size = 0.5) +
+  #scale_fill_viridis_c(option = "B", direction = -1, begin = 0.1) +
+  #scale_fill_brewer(palette="BrBG") +
+  #scale_fill_gradient2(mid="white", low=viridis_pal(option="A")[1], high=viridis_pal(option="A")[8])+
+  scale_fill_gradient2(high = "darkred", mid = "white", low = "darkblue") +
+  labs(title = "Standardized residuals of activity co-occurrence proportions",
+       x = "Original activity", y = "Co-occurring activity",
+       fill = "Standardized\nResidual") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "right",
+     panel.grid = element_blank()
+  )
+```
+
+## PMI
+```{r}
+#log(p(x,y)/p(x)*p(y))
+activity_pairs_pmi <- activity_pairs |>
+  left_join(diagonal_counts, by=c("activity1"="activity1")) |>
+  rename(n1 = diag_n) |>
+  left_join(diagonal_counts, by=c("activity2"="activity1")) |>
+  rename(n2 = diag_n) |>
+  mutate(total_num_videos = length(unique(df_cleaned$superseded_gcp_name_feb25)),
+         p_activity1 = n1/sum(total_num_videos),
+         p_activity2 = n2/sum(total_num_videos),
+         p_activities = n/sum(total_num_videos),
+         pmi = log(p_activities / (p_activity1 * p_activity2)))
+
+filter_out_categories <- c("crying", "nursing")
+activity_pairs_pmi <- activity_pairs_pmi |>
+  filter(!(activity1 %in% filter_out_categories) & !(activity2 %in% filter_out_categories))
+# |> filter(activity1 != activity2) 
+
+pmi_matrix <- activity_pairs_pmi |>
+  select(activity1, activity2, pmi) |>
+  pivot_wider(names_from = activity2, values_from = pmi, values_fill = 0) %>%
+  column_to_rownames("activity1") %>%
+  as.matrix()
+
+hcluster_pmi <- hclust(as.dist(-pmi_matrix), method="average")
+hcluster_pmi$order
+colnames(pmi_matrix)[hcluster_pmi$order]
+pmi_ordered <- activity_pairs_pmi
+pmi_ordered$activity1 <- fct_relevel(activity_pairs_pmi$activity1, colnames(pmi_matrix)[hcluster_pmi$order])
+pmi_ordered$activity2 <- fct_relevel(activity_pairs_pmi$activity2, colnames(pmi_matrix)[hcluster_pmi$order])
+
+ggplot(pmi_ordered, aes(x = activity1, y = activity2, fill = pmi)) +
+  geom_tile(color = "white", size = 0.5) +
+  #scale_fill_viridis_c(option = "B", direction = -1, begin = 0.1) +
+  #scale_fill_brewer(palette="BrBG") +
+  #scale_fill_gradient2(mid="white", low=viridis_pal(option="A")[1], high=viridis_pal(option="A")[8])+
+  scale_fill_gradient2(high = "darkred", mid = "white", low = "darkblue", midpoint=mean(pmi_ordered$pmi)) +
+  labs(title = "Pointwise mutual information across activities",
+       x = "Activity", y = "Activity",
+       fill = "PMI") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "right",
+     panel.grid = element_blank()
+  )
+```
+```{r}
+activity_pairs <- df_sustained_activities %>%
+  # self-join within video_id to compare activities
+  inner_join(df_sustained_activities, by = "video_id", suffix = c("_1", "_2")) %>%
+  # ensure distinct pairs (avoid duplicate rows and self-joins unless same activity)
+  filter(Activity_1 <= Activity_2) %>%
+  # keep only pairs within 5 minutes
+  filter(abs(start_time_1 - start_time_2) <= 300) %>%
+  # rename for consistency
+  transmute(
+    activity1 = Activity_1,
+    activity2 = Activity_2
+  ) %>%
+  count(activity1, activity2) %>%
+  # add reverse pairs for symmetric matrix
+  bind_rows(
+    .,
+    select(., activity1 = activity2, activity2 = activity1, n)
+  ) %>%
+  # add diagonal (self-pairs)
+  bind_rows(
+    df_sustained_activities %>%
+      group_by(video_id, Activity) %>%
+      slice(1) %>%
+      ungroup() %>%
+      count(Activity) %>%
+      rename(activity1 = Activity) %>%
+      mutate(activity2 = activity1)
+  ) |>
+  distinct(activity1, activity2, .keep_all=TRUE)
+
+# diagonal counts for proportion
+diagonal_counts <- activity_pairs %>%
+  filter(activity1 == activity2) %>%
+  select(activity1, diag_n = n)
+
+# join & compute proportions
+activity_pairs_prop <- activity_pairs %>%
+  left_join(diagonal_counts, by = "activity1") %>%
+  mutate(proportion = n / diag_n) %>%
+  select(activity1, activity2, proportion)
+
+
+
+```
+
+```{r}
+# pearson's correlation in video
+# z-scoring in some way
+```
+
+```{r}
+# =============================================================================
+# PLOT 3: Average Duration Analysis
+# =============================================================================
+#summarized_data(df_sustained, )
+# Average duration by activity with 95% CI
+summarized_data <- function(data, x_var, y_var, group_var) {
+  return(data %>%
+           group_by_at(c(x_var, group_var)) %>%
+           summarise(mean_value = mean(.data[[y_var]], na.rm = TRUE),
+                     sd_value = sd(.data[[y_var]], na.rm = TRUE),
+                     n = n(),
+                     se = sd_value / sqrt(n()),
+                     ci_lower = mean_value - qt(1 - (0.05 / 2), n - 1) * se,
+                     ci_upper = mean_value + qt(1 - (0.05 / 2), n - 1) * se,
+                     .groups = 'drop')
+  )
+}
+activity_duration <-
+  df_sustained_activities %>%
+  group_by(Activity) %>%
+  summarise(
+    mean_duration_sec = mean(duration_seconds),
+    sd_duration_sec = sd(duration_seconds),
+    n_episodes = n(),
+    se_duration_sec = sd_duration_sec / sqrt(n_episodes),
+    # 95% CI
+    ci_lower = mean_duration_sec - qt(0.975, n_episodes - 1) * se_duration_sec,
+    ci_upper = mean_duration_sec + qt(0.975, n_episodes - 1) * se_duration_sec,
+    .groups = 'drop'
+  )
+p3a <- ggplot(activity_duration, aes(x = reorder(Activity, mean_duration_sec), y = mean_duration_sec)) +
+  geom_col(fill = activity_color, alpha = 0.7) +
+  geom_errorbar(aes(ymin = pmax(0, ci_lower), ymax = ci_upper),
+                width = 0.2, alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Mean Episode Duration by Activity (95% CI)",
+       x = "Activity", y = "Mean Duration (seconds)") +
+  theme_minimal()
+
+# Average duration by location with 95% CI
+location_duration <- df_sustained %>%
+  group_by(Location) %>%
+  summarise(
+    mean_duration_sec = mean(duration_seconds),
+    sd_duration_sec = sd(duration_seconds),
+    n_episodes = n(),
+    se_duration_sec = sd_duration_sec / sqrt(n_episodes),
+    # 95% CI
+    ci_lower = mean_duration_sec - qt(0.975, n_episodes - 1) * se_duration_sec,
+    ci_upper = mean_duration_sec + qt(0.975, n_episodes - 1) * se_duration_sec,
+    .groups = 'drop'
+  )
+
+p3a <- ggplot(activity_duration, aes(x = reorder(Activity, mean_duration_sec), y = mean_duration_sec)) +
+  geom_col(fill = activity_color, alpha = 0.7) +
+  geom_errorbar(aes(ymin = pmax(0, ci_lower), ymax = ci_upper),
+                width = 0.2, alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Mean Episode Duration by Activity (95% CI)",
+       x = "Activity", y = "Mean Duration (seconds)") +
+  theme_minimal()
+
+p3b <- ggplot(location_duration, aes(x = reorder(Location, mean_duration_sec), y = mean_duration_sec)) +
+  geom_col(fill = location_color, alpha = 0.7) +
+  geom_errorbar(aes(ymin = pmax(0, ci_lower), ymax = ci_upper),
+                width = 0.2, alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Mean Episode Duration by Location (95% CI)",
+       x = "Location", y = "Mean Duration (seconds)") +
+  theme_minimal()
+
+# Combine Plot 3 panels
+plot3 <- p3a | p3b
+plot3 <- plot3 + plot_annotation(title = "Plot 3: Episode Duration Analysis with 95% Confidence Intervals")
+
+p3a <- ggplot(activity_duration, aes(x = reorder(Activity, mean_duration_sec), y = mean_duration_sec)) +
+  geom_col(fill = activity_color, alpha = 0.7) +
+  geom_errorbar(aes(ymin = pmax(0, ci_lower), ymax = ci_upper),
+                width = 0.2, alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Mean Episode Duration by Activity (95% CI)",
+       x = "Activity", y = "Mean Duration (seconds)") +
+  theme_minimal()
+print(p3a)
+```
+# sustained activities -- plot
+```{r}
+# Calculate total hours of data per subject for weighting
+subject_hours <- df_sustained_activities %>%
+  group_by(subject_id, Activity) %>%
+  summarise(activity_hours = sum(duration_seconds) / 3600, .groups = 'drop') |>
+  group_by(subject_id) |>
+  mutate(total_hours = sum(activity_hours), .groups = 'drop')
+
+# Calculate activity duration at subject level first
+subject_activity_duration <- df_sustained_activities %>%
+  group_by(subject_id, Activity) %>%
+  summarise(
+    mean_duration_sec = mean(duration_seconds),
+    n_episodes = n(),
+    .groups = 'drop'
+  ) %>%
+  left_join(subject_hours, by = c("subject_id", "Activity"))
+
+# Calculate group-level statistics with weighting
+activity_duration_weighted <- subject_activity_duration %>%
+  group_by(Activity) %>%
+  group_modify(~ weighted_ci_normal_df(
+    .x,
+    value_col = "mean_duration_sec",
+    weight_col = "total_hours",
+    group_col = NULL
+  )) %>%
+  ungroup() %>%
+  # Add total sample size info
+  left_join(
+    subject_activity_duration %>%
+      group_by(Activity) %>%
+      summarise(
+        n_subjects = n(),
+        total_episodes = sum(n_episodes),
+        .groups = 'drop'
+      ),
+    by = "Activity"
+  )
+
+# Get top 10 activities by mean duration
+top_10_activities <- props_data %>%
+  filter(variable=="Activity") |>
+  arrange(desc(n)) %>%
+  slice_head(n = 10) %>%
+  pull(Activity)
+
+# Filter data to top 10 activities
+activity_durations_filtered <- activity_duration_weighted %>%
+  filter(Activity %in% top_activities)
+
+subject_activity_durations_filtered <- subject_activity_duration %>%
+  filter(Activity %in% top_activities)
+
+# Plot 1: Mean episode duration with individual subject points
+#  labs(title = "Mean episode duration by activity (weighted by subject hours)",
+#      subtitle = "Points show individual subjects, sized by hours of data",
+sustained_plot <- ggplot(activity_durations_filtered, aes(x = reorder(Activity, -weighted_mean), y = weighted_mean, fill=Activity)) +
+    geom_point(data = subject_activity_durations_filtered, 
+             aes(x = Activity, y = mean_duration_sec, size = activity_hours, color=Activity),
+             alpha = 0.4, position = position_jitter(width = 0.2)) +
+  geom_errorbar(aes(ymin = pmax(0, ci_lower), ymax = ci_upper),
+                width = 0.2, alpha = 0.8) +
+  geom_point(alpha=0.8, size=3) +
+  labs(title = "",
+       subtitle = "",
+       x = "Activity", y = "Mean duration (seconds)",
+       size = "Total hours of data\nper participant and activity") +
+  theme_classic() +
+geom_hline(yintercept = 10, linetype = "dotted", color = "black", size = 0.8) +
+  scale_y_continuous(limits = c(5, 100), breaks=seq(10, 100, by = 20)) +
+   scale_fill_manual(values = setNames(activity_palette, top_activities), guide="none") +
+  scale_color_manual(values = setNames(activity_palette, top_activities), guide="none") +
+  scale_size_continuous(range = c(5, 15)) +
+  theme(
+  # Axis text
+  axis.text.x = element_text(size = 24),  # X-axis labels
+  axis.text.y = element_text(size = 24),                         # Y-axis labels
+  
+  # Axis titles
+  axis.title.x = element_text(size = 28),
+  axis.title.y = element_text(size = 28),
+  
+  # Legend
+  legend.position = c(0.9, 0.7), 
+  legend.title = element_text(size = 22),
+  legend.text = element_text(size = 20),
+)
+sustained_plot
+
+ ggsave(here("figures/sustained_activities.png"), sustained_plot, width=20, height=10)
+```
+
+```{r}
+# Calculate total hours per participant
+participant_hours <- df_cleaned %>%
+  left_join(recordings) |>
+  group_by(subject_id) %>%
+  summarise(total_hours = n() / 360, .groups = 'drop')
+
+# Calculate activity proportions at participant level
+participant_activity_props <- df_cleaned %>%
+  left_join(recordings) |>
+  group_by(subject_id, Activity) %>%
+  summarise(activity_hours = n() / 360, .groups = 'drop') %>%
+  left_join(participant_hours, by = "subject_id") %>%
+  mutate(activity_proportion = activity_hours / total_hours)
+
+# Calculate weighted mean proportions across participants
+activity_props_weighted <- participant_activity_props %>%
+  group_by(Activity) %>%
+  group_modify(~ weighted_ci_normal_df(
+    .x,
+    value_col = "activity_proportion",
+    weight_col = "total_hours",
+    group_col = NULL
+  )) |>
+  ungroup()
+
+# Filter data for plotting
+activity_props_filtered <- activity_props_weighted %>%
+  filter(Activity %in% top_activities)
+
+participant_props_filtered <- participant_activity_props %>%
+  filter(Activity %in% top_activities)
+
+# Create the plot
+proportions_plot <- ggplot(activity_props_filtered, 
+                          aes(x = reorder(Activity, -weighted_mean), 
+                              y = weighted_mean, 
+                              fill = Activity)) +
+  geom_point(data = participant_props_filtered,
+             aes(x = Activity, y = activity_proportion, 
+                 size = activity_hours, color = Activity),
+             alpha = 0.4, position = position_jitter(width = 0.2)) +
+  
+  geom_point(alpha = 0.8, size = 3) +
+   geom_errorbar(aes(ymin = pmax(0, ci_lower), ymax = ci_upper),
+                width = 0.2, alpha = 0.8) +
+  labs(x = "Activity", 
+       y = "Proportion of detections",
+       size = "Total hours\nper participant") +
+  theme_classic() +
+  scale_y_continuous(limits = c(0, max(activity_props_filtered$weighted_mean) * 1.1)) +
+  scale_fill_manual(values = setNames(activity_palette, top_activities), guide = "none") +
+  scale_color_manual(values = setNames(activity_palette, top_activities), guide = "none") +
+  scale_size_continuous(range = c(5, 15)) +
+  theme(
+  # Axis text
+  axis.text.x = element_text(size = 24, angle=45,hjust=1),  # X-axis labels
+  axis.text.y = element_text(size = 24),                         # Y-axis labels
+  
+  # Axis titles
+ axis.title.x = element_text(size = 28),
+  axis.title.y = element_text(size = 28, margin = margin(r = 15)),
+  
+  # Legend
+  legend.position = "none",
+)
+
+sustained_plot <- ggplot(activity_durations_filtered, aes(x = reorder(Activity, -weighted_mean), y = weighted_mean, fill=Activity)) +
+    geom_point(data = subject_activity_durations_filtered, 
+             aes(x = Activity, y = mean_duration_sec, size = activity_hours, color=Activity),
+             alpha = 0.4, position = position_jitter(width = 0.2)) +
+  geom_errorbar(aes(ymin = pmax(0, ci_lower), ymax = ci_upper),
+                width = 0.2, alpha = 0.8) +
+  geom_point(alpha=0.8, size=3) +
+  labs(title = "",
+       subtitle = "",
+       x = "Activity", y = "Mean duration (seconds)",
+       size = "Total hours of data\nper participant and \nactivity") +
+  theme_classic() +
+geom_hline(yintercept = 10, linetype = "dotted", color = "black", size = 0.8) +
+  scale_y_continuous(limits = c(5, 100), breaks=seq(10, 100, by = 20)) +
+   scale_fill_manual(values = setNames(activity_palette, top_activities), guide="none") +
+  scale_color_manual(values = setNames(activity_palette, top_activities), guide="none") +
+  scale_size_continuous(range = c(5, 15)) +
+  theme(
+  # Axis text
+  axis.text.x = element_text(size = 24, angle=45, hjust=1),  # X-axis labels
+  axis.text.y = element_text(size = 24),                         # Y-axis labels
+  
+  # Axis titles
+  axis.title.x = element_text(size = 28),
+  axis.title.y = element_text(size = 28, margin = margin(r = 15)),
+  
+  # Legend
+  legend.position = c(0.85, 0.7), 
+  legend.title = element_text(size = 22),
+  legend.text = element_text(size = 20),
+)
+
+proportions_plot
+sustained_plot
+subject_weighted_plot <- cowplot::plot_grid(
+  proportions_plot, sustained_plot,
+  labels = c("A", "B"),   # Add labels
+  label_size = 28,        # Font size
+  label_fontface = "bold",# Bold labels
+  label_x = 0,            # Left align
+  label_y = 1,            # Top align
+  hjust = -0.2,           # Adjust horizontal position
+  vjust = 1.2             # Adjust vertical position
+)
+
+# Show the plot
+print(subject_weighted_plot)
+ ggsave(here("figures/subject_weighted.png"), subject_weighted_plot, width=20, height=10)
+```
+
+
+```{r}
+playing_duration_plot <- df_sustained_activities_top10 |> 
+  filter(Activity == "playing") |>
+  ggplot(aes(x = duration_seconds)) +
+  geom_histogram(binwidth = 10, 
+                 fill = "#3498db", 
+                 color = "white", 
+                 alpha = 0.8) +
+  scale_x_continuous(
+    breaks = seq(0, max(df_sustained_activities_top10$duration_seconds[df_sustained_activities_top10$Activity == "playing"], na.rm = TRUE), 10)
+  ) +
+  labs(
+    title = "Distribution of Playing Episode Durations",
+    x = "Duration (seconds)",
+    y = "Number of Episodes"
+  ) +
+  theme_minimal() 
+
+playing_duration_plot
+```
+
+```{r}
+# Plot 2: Activity proportions by episode duration bins
+# Create duration bins from 10-80 seconds
+df_sustained_activities_top10 <- df_sustained_activities %>%
+  filter(Activity %in% top_10_activities,
+         duration_seconds >= 10, duration_seconds <= 80)
+
+# Create duration bins (e.g., 10-second intervals)
+df_sustained_activities_top10 <- df_sustained_activities_top10 %>%
+  mutate(duration_bin = cut(duration_seconds, 
+                           breaks = seq(10, 80, by = 10),
+                           include.lowest = TRUE,
+                           labels = c("10-20", "21-30", "31-40", "41-50", 
+                                     "51-60", "61-70", "71-80")))
+
+# Calculate proportions within each duration bin
+activity_props_by_duration <- df_sustained_activities_top10 %>%
+  group_by(duration_bin, Activity) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  group_by(duration_bin) %>%
+  mutate(
+    total_in_bin = sum(count),
+    proportion = count / total_in_bin
+  ) %>%
+  ungroup()
+
+# Create a color palette for the top 10 activities
+p3b <- ggplot(activity_props_by_duration, aes(x = duration_bin, y = proportion, 
+                                              fill = Activity, group = Activity)) +
+  geom_area(alpha = 0.7, position = "fill") +
+  labs(title = "Activity Proportions by Episode Duration",
+       subtitle = "How relative proportions of top 10 activities change with episode length",
+       x = "Episode Duration (seconds)", 
+       y = "Proportion of Activities",
+       fill = "Activity") +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "right",
+        legend.key.size = unit(0.5, "cm")) +
+  guides(fill = guide_legend(ncol = 1))
+
+# Alternative version showing trend lines instead of stacked areas
+p3b_lines <- ggplot(activity_props_by_duration, aes(x = as.numeric(duration_bin), 
+                                                    y = proportion, color = Activity)) +
+  geom_line(size = 1.2, alpha = 0.8) +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_manual(values = activity_colors) +
+  scale_x_continuous(breaks = 1:7, 
+                     labels = c("10-20", "21-30", "31-40", "41-50", 
+                               "51-60", "61-70", "71-80")) +
+  labs(title = "Activity Proportion Trends by Episode Duration",
+       subtitle = "How proportions of top 10 activities change with episode length",
+       x = "Episode Duration (seconds)", 
+       y = "Proportion of Activities",
+       color = "Activity") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "right") +
+  guides(color = guide_legend(ncol = 1))
+
+# Combine plots into a panel
+library(patchwork)
+combined_plot <- p3a / p3b_lines
+combined_plot <- combined_plot + plot_annotation(
+  title = "Activity Duration Analysis: Top 10 Activities",
+  theme = theme(plot.title = element_text(size = 16, hjust = 0.5))
+)
+
+# Display the combined plot
+print(combined_plot)
+
+```
+1. How much does this change when you get rid of the location episode
+2. Within-subject and then dot for every subject
+3. Individual dot in alpha 0.2, non-transparent, weight by number of hours of data per subject
+4. Restrict to activities that had x amount of data in them
+
+```{r}
+
+
+p1b <- ggplot(location_pairs, aes(x = location1, y = location2, fill = n)) +
+  geom_tile(color = "white", size = 0.5) +
+  scale_fill_viridis_c(name = "Videos", trans = "sqrt") +
+  labs(title = "Location Co-occurrences Within Videos",
+       x = "Location", y = "Location") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+p1c <- ggplot(activity_location_matrix, aes(x = Activity, y = Location, fill = n_videos)) +
+  geom_tile(color = "white", size = 0.5) +
+  scale_fill_viridis_c(name = "Videos", trans = "sqrt") +
+  labs(title = "Activity-Location Co-occurrences Within Videos",
+       x = "Activity", y = "Location") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(hjust = 0.5)
+  )
+#print(p1b) 
+#print(p1c)
+
+# =============================================================================
+# PLOT 2: Individual Differences in Activity and Location Distributions
+# =============================================================================
+
+# Activity distribution by subject
+activity_by_subject <- df_sustained %>%
+  group_by(subject_id, Activity) %>%
+  summarise(
+    total_duration_sec = sum(duration_seconds),
+    n_episodes = n(),
+    .groups = 'drop'
+  ) %>%
+  group_by(subject_id) %>%
+  mutate(
+    prop_duration = total_duration_sec / sum(total_duration_sec),
+    prop_episodes = n_episodes / sum(n_episodes)
+  )
+
+# Location distribution by subject
+location_by_subject <- df_sustained %>%
+  group_by(subject_id, Location) %>%
+  summarise(
+    total_duration_sec = sum(duration_seconds),
+    n_episodes = n(),
+    .groups = 'drop'
+  ) %>%
+  group_by(subject_id) %>%
+  mutate(
+    prop_duration = total_duration_sec / sum(total_duration_sec),
+    prop_episodes = n_episodes / sum(n_episodes)
+  )
+
+# Create Plot 2: Individual differences
+p2a <- ggplot(activity_by_subject, aes(x = subject_id, y = prop_duration, fill = Activity)) +
+  geom_col(position = "stack") +
+  scale_fill_viridis_d() +
+  labs(title = "Activity Duration Proportions by Subject",
+       x = "Subject ID", y = "Proportion of Total Duration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2b <- ggplot(location_by_subject, aes(x = subject_id, y = prop_duration, fill = Location)) +
+  geom_col(position = "stack") +
+  scale_fill_brewer(type = "qual", palette = "Set2") +
+  labs(title = "Location Duration Proportions by Subject",
+       x = "Subject ID", y = "Proportion of Total Duration") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Combine Plot 2 panels
+plot2 <- (p2a | p2b) / (p2c | p2d)
+plot2 <- plot2 + plot_annotation(title = "Plot 2: Individual Differences in Activity and Location Patterns")
+
+print(plot2)
+
+# Activity diversity by subject (using Shannon entropy)
+activity_diversity <- activity_by_subject %>%
+  group_by(subject_id) %>%
+  summarise(
+    shannon_entropy = -sum(prop_duration * log(prop_duration + 1e-10)),
+    n_activities = n(),
+    .groups = 'drop'
+  )
+
+location_diversity <- location_by_subject %>%
+  group_by(subject_id) %>%
+  summarise(
+    shannon_entropy = -sum(prop_duration * log(prop_duration + 1e-10)),
+    n_locations = n(),
+    .groups = 'drop'
+  )
+
+p2c <- ggplot(activity_diversity, aes(x = subject_id, y = shannon_entropy)) +
+  geom_col(fill = "coral", alpha = 0.7) +
+  labs(title = "Activity Diversity by Subject (Shannon Entropy)",
+       x = "Subject ID", y = "Shannon Entropy") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p2d <- ggplot(location_diversity, aes(x = subject_id, y = shannon_entropy)) +
+  geom_col(fill = "lightblue", alpha = 0.7) +
+  labs(title = "Location Diversity by Subject (Shannon Entropy)",
+       x = "Subject ID", y = "Shannon Entropy") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Combine Plot 2 panels
+plot2 <- (p2a | p2b) / (p2c | p2d)
+plot2 <- plot2 + plot_annotation(title = "Plot 2: Individual Differences in Activity and Location Patterns")
+
+print(plot2)
 ```

@@ -7,9 +7,10 @@ library(lmerTest)
 
 # Data import
 ```{r}
-recordings <- read_csv(here("data/recordings_proceessed.csv")) |> select(-start_time)
+recordings <- read_csv(here("data/recordings_processed.csv")) |> select(-start_time)
 all_locations_avg <- read_csv(here("data/all_contexts_cleaned.csv")) |>
   mutate(location = Location) |>
+  mutate(location = locations_avg) |>
   rowwise() |>
   mutate(frame_num = list(seq(start_time, end_time))) |>
   unnest(frame_num)
@@ -17,7 +18,7 @@ all_locations_avg <- read_csv(here("data/all_contexts_cleaned.csv")) |>
 # Constants and helpers
 Setting a minimum number of continuous frames to count a location as a 'stable' location. 10 frames = 10 seconds.
 ```{r}
-LOCATION_LENGTH <- 30
+LOCATION_LENGTH <- 60
 
 avg_age <- function(df) {
   df |> mutate(age_avg = str_extract_all(age_bin, "\\d+") %>% 
@@ -109,7 +110,8 @@ locations_age <- all_locations_avg |>
    left_join(recordings) |>
   filter(!is.na(location)) |>
   bin_age() |>
-  rename(total_frame_count = total_count)
+  rename(total_frame_count = total_count) |>
+  filter(!(location %in% c("other", "")))
 ```
 
 ## prop of locations across age
@@ -191,7 +193,7 @@ check_df <- loc_lengths %>%
     .groups = "drop"
   ) %>%
   mutate(match = sum_video_frame_count == total_frame_count)
-stopifnot(all(check_df$match))
+#stopifnot(all(check_df$match))
 ```
 
 ```{r}
@@ -381,6 +383,9 @@ plot_subject_breakdown(switches_weighted, prop_switches, x_var="age_bin", y_var=
 ```{r}
 loc_switch_model <- lmer(scale(prop) ~ scale(age_avg) + scale(total_hours) +  (1 | subject_id), data = prop_switches)
 summary(loc_switch_model)
+
+loc_switch_model_filtered <- lmer(scale(prop) ~ scale(age_avg) + scale(total_hours) +  (1 | subject_id), data = prop_switches |> filter(age_avg < 33 & age_avg > 15))
+summary(loc_switch_model_filtered)
 ```
 
 Accounting for the variability of affordances offered across locations

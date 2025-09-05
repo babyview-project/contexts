@@ -1,0 +1,734 @@
+```{r}
+library(tidyverse)
+library(here)
+library(glue)
+library(tidytext)
+```
+
+```{r}
+df_cleaned <- read.csv(here("data", "all_contexts_cleaned.csv")) 
+#df_sustained_activities %>%
+ # filter(duration_seconds >= 60)
+  #read.csv(here("data", "all_contexts_cleaned.csv"))
+df_cleaned_seconds <- df_cleaned |>
+  rowwise() |>
+  mutate(frame_num = list(seq(start_time+1, end_time))) |>
+  unnest(frame_num) |>
+  filter(Activity != "")
+recordings <- read_csv(here("data/recordings_processed.csv")) |> select(-start_time)
+
+nrow(df_cleaned |> left_join(recordings) |> filter(!is.na(gopro_video_id)))/360
+```
+
+```{r}
+library(stringr)
+df_all <- read.csv(here("data", "all_contexts.csv")) 
+df_missing <- read.csv(here("data", "all_contexts.csv")) |> filter(Location == "")    |> mutate(superseded_gcp_name_feb25 = sub("_processed.*", "", video_id),
+         chunk_num = as.integer(sub(".*_(\\d+)\\.mp4", "\\1", basename(video_path))))
+
+mean(sapply(str_split(df_cleaned$Video.description, " "), length))
+```
+
+```{r}
+length(df_all[,1])
+```
+
+# Constants and helpers
+Setting a minimum number of continuous frames to count a location as a 'stable' location. 10 frames = 10 seconds.
+```{r}
+LOCATION_LENGTH <- 30
+
+avg_age <- function(df) {
+  df |> mutate(age_avg = str_extract_all(age_bin, "\\d+") %>% 
+      lapply(as.numeric) %>% 
+      sapply(function(x) mean(x)))
+}
+
+bin_age <- function(df) {
+  df |> mutate(age_bin = case_when(
+    age < 12*30 ~ "5-12",
+    age < 18*30 ~ "12-18",
+    age < 24*30 ~ "18-24",
+    age < 30*30 ~ "24-30",
+    age < 36*30 ~ "30-36")) |> group_by(age_bin, subject_id) |> filter(!is.na(age_bin)) |>
+  mutate(total_count = n(), 
+         age_bin = factor(age_bin, levels = c("5-12", "12-18", "18-24", "24-30", "30-36")))
+}
+
+weighted_ci_normal_df <- function(df, value_col, weight_col, group_col = NULL, conf_level = 0.95) {
+  z <- qnorm(1 - (1 - conf_level) / 2)
+  
+  # Group if needed, otherwise treat as single group
+  if (!is.null(group_col)) {
+    df <- df %>% group_by(.data[[group_col]])
+  }
+  
+  df %>%
+    summarise(
+      weighted_mean = weighted.mean(.data[[value_col]], .data[[weight_col]], na.rm = TRUE),
+      w_var = sum(.data[[weight_col]] * (.data[[value_col]] - weighted_mean)^2, na.rm = TRUE) / sum(.data[[weight_col]], na.rm = TRUE),
+      w_se = sqrt(w_var / n()),
+      ci_lower = weighted_mean - z * w_se,
+      ci_upper = weighted_mean + z * w_se,
+      n_group = n(),
+      .groups = 'drop'
+    )
+}
+
+summarized_data <- function(data, x_var, y_var, group_var) {
+  return(data %>%
+           group_by_at(c(x_var, group_var)) %>%
+           summarise(mean_value = mean(.data[[y_var]], na.rm = TRUE),
+                     sd_value = sd(.data[[y_var]], na.rm = TRUE),
+                     n = n(),
+                     se = sd_value / sqrt(n()),
+                     ci_lower = mean_value - qt(1 - (0.05 / 2), n - 1) * se,
+                     ci_upper = mean_value + qt(1 - (0.05 / 2), n - 1) * se,
+                     .groups = 'drop')
+  )
+}
+
+plot_subject_breakdown <- function(df, subject_df, x_var, y_var, group, input_title, x_lab, y_lab, use_size = TRUE, use_line=TRUE) {
+  p <- ggplot(data = df, aes(x = .data[[x_var]], y = weighted_mean, group = 1))
+  
+  if (use_size && "total_hours" %in% names(subject_df)) {
+    p <- p + geom_jitter(
+      data = subject_df,
+      aes(x = .data[[x_var]], y = .data[[y_var]], color = .data[[group]], size = total_hours),
+      width = 0.1, height = 0, alpha = 0.5
+    )
+  } else {
+    p <- p + geom_jitter(
+      data = subject_df,
+      aes(x = .data[[x_var]], y = .data[[y_var]], color = .data[[group]]),
+      width = 0.1, height = 0, alpha = 0.5
+    )
+  }
+  
+  if (use_line) {
+    p <- p + geom_line()
+  }
+  
+  p  +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.1) +
+    labs(
+      title = input_title,
+      x = x_lab,
+      y = y_lab
+    ) +
+    theme_minimal() +
+    guides(color = "none")
+}
+```
+
+```{r}
+contexts_avg <- df_cleaned_seconds |>
+   left_join(recordings) |>
+  filter(!is.na(location)) |>
+  bin_age() |>
+  rename(total_frame_count = total_count)
+```
+# Sustained activities and locations
+1. Todo: does the amount of time children persist with a single activity decrease over age?
+2. Todo: does the entropy of activities decrease across age
+
+```{r}
+props_data <- bind_rows(
+  df_cleaned %>%
+    count(Activity) %>%
+    mutate(prop = n / sum(n),
+           variable = "Activity",
+           category = Activity),
+  
+  df_cleaned %>%
+    count(Location) %>%
+    mutate(prop = n / sum(n),
+           variable = "Location",
+           category = Location)
+)
+
+
+props_data <- props_data %>%
+  group_by(variable) %>%
+  mutate(category = reorder_within(category, -prop, variable)) %>%
+  ungroup()
+
+props_plot <- ggplot(props_data, aes(x = category, y = prop, fill = variable)) +
+  geom_col() +
+    coord_flip() +
+   scale_y_continuous() +
+  labs(title = "",
+       x = NULL,
+       y = "Proportion of detections") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_wrap(~variable, scales = "free_y") +
+  scale_x_reordered() +
+  scale_fill_manual(
+    values = c(
+      "Location" = location_color,
+      "Activity" = activity_color
+    )
+  ) + theme_classic() +
+    theme(
+      strip.text = element_text(size = 20),
+    # Axis text
+    axis.text.x = element_text(size = 12),  # X-axis labels
+    axis.text.y = element_text(size = 14),                         # Y-axis labels
+    
+    # Axis titles
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    
+    # Legend
+    legend.position = "none"
+      ) 
+props_plot
+
+log_props_plot <- ggplot(props_data, aes(x = category, y = log(prop) + 10, fill = variable)) +
+  geom_col() +
+   scale_y_continuous(
+    breaks = seq(0, 10, 2),
+    labels = seq(-10, 0, 2)
+  ) +
+  labs(x = NULL,
+       y = "log (proportion)") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_wrap(~variable, scales = "free_x") +
+  scale_x_reordered() +
+  scale_fill_manual(
+    values = c(
+      "Location" = location_color,
+      "Activity" = activity_color
+    )
+  )
+log_props_plot
+
+ggsave(here("figures/base_frequency.svg"),props_plot,  width=9.5, height=8, device="pdf")
+```
+
+# Prop of locations within activities
+```{r}
+props_data <- df_cleaned %>%
+  group_by(Activity, Location) %>%
+  summarise(n = n(), .groups = "drop") 
+
+# Create stacked bar chart
+ggplot(props_data, aes(x = Activity, y = n, fill = Location)) +
+  geom_bar(stat = "identity", position = "fill") +  # fill = proportion
+  scale_y_continuous(labels = scales::percent_format()) +  # show as %
+  labs(
+    title = "Proportion of Locations Within Activities",
+    x = "Activity",
+    y = "Proportion",
+    fill = "Location"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+```{r}
+library(tidyr)
+library(scales)
+
+top_locations <- df_cleaned %>%
+  mutate(Location = ifelse(Location == "deck", "outside", Location)) |>
+  count(Location, sort = TRUE) |>
+  slice_head(n = 6) |>  # Top 8 locations
+  pull(Location)
+
+top_locations <- c(top_locations, "garden")
+
+library(dplyr)
+library(ggplot2)
+library(forcats)
+
+df_prop <- df_cleaned %>%
+  mutate(Location_grouped = ifelse(Location %in% top_locations, Location, "other")) %>%
+  group_by(Activity, Location_grouped) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(Activity) %>%
+  mutate(prop = n / sum(n)) %>%   # calculate proportion per Activity
+  ungroup() %>%
+  arrange(desc(prop))
+
+# Plot
+my_set2_no_orange_green <- c(
+  "#75A7B4", # teal
+  "#E78AC3", # pink
+  "#FFD92F", # yellow
+  "#8DA0CB", # blue
+  "#A6CEE3", # light blue (from Set3)
+  "#CAB2D6", # lavender (from Set3)
+  "#FB9A99",  # soft red (from Set3)
+  "#B3B3B3" # gray
+)
+
+my_set2_complementary <- c(
+  "#8A7FDB", # lavender-blue
+  "#D17BA8", # dusty rose
+  "#EBC944", # golden yellow
+  "#CFA97E", # tan-brown
+  "#9CC4E4", # soft sky blue
+  "#3B7A57", # dark teal-green (deep contrast)
+  "#A3C17B", # light yellow-green (brighter contrast)
+  "#B3B3B3"  # gray
+)
+
+
+df_prop_reordered <- df_prop %>%
+  filter(Activity != "other") %>%
+  group_by(Activity) %>%
+  arrange(desc(prop)) %>%  # largest prop first
+  mutate(
+    # Make gray ("other") always first in stacking (bottom), others in descending order
+    Location_grouped = fct_relevel(Location_grouped,
+                                   "other",
+                                   after = 0)
+  ) %>%
+  ungroup()
+
+location_order <- props_data |>
+  filter(variable == "Location") |>
+  arrange(desc(prop)) |>
+  pull(Location)
+
+# Reorder factor globally so ggplot stacks correctly
+df_prop_reordered <- df_prop %>%
+  mutate(Location_grouped = factor(Location_grouped)) %>%
+  group_by(Activity) %>%
+  arrange(Activity, desc(prop)) %>% 
+  group_by(Activity) %>%
+  mutate(
+    # First, reorder by prop in descending order
+    Location_grouped = fct_reorder(Location_grouped, prop, .desc = TRUE),
+    # Then move "Other" to the end
+    Location_grouped = fct_relevel(Location_grouped, "other", after = Inf)
+  ) %>%
+  ungroup() |>
+   mutate(
+    Activity = fct_relevel(Activity, "other", after = Inf),
+    Location_grouped = fct_relevel(Location_grouped, intersect(location_order,levels(Location_grouped))),
+    Location_grouped = fct_relevel(Location_grouped, "other", after=Inf)
+  )
+
+# Plot
+p1 <- ggplot(df_prop_reordered, aes(x = Activity, y = prop, fill = Location_grouped)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = my_set2_no_orange_green) +
+  labs(
+    x = "Activity",
+    y = "Proportion of activity in location",
+    fill = "Location"
+  ) +
+  scale_y_continuous(limits=c(0,NA)) +
+  theme_classic() +
+  theme(
+    # Axis text
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  # X-axis labels
+    axis.text.y = element_text(size = 14),                         # Y-axis labels
+    
+    # Axis titles
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    
+    # Legend
+    legend.position = "right",
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14),
+      ) +
+  guides()
+
+print(p1)
+
+ggsave(here("figures/loc_prop.svg"), p1, width=9.2, height=8, bg = "white", device = "pdf")
+```
+
+```{r}
+# 4. Alternative: Faceted approach for key activities
+key_activities <- df_cleaned %>%
+  count(Activity, sort = TRUE) %>%
+  slice_head(n = 12) %>%
+  pull(Activity)
+
+df_faceted <- df_cleaned %>%
+  filter(Activity %in% key_activities) %>%
+  group_by(Activity, Location) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(Activity) %>%
+  mutate(prop = n / sum(n)) %>%
+  filter(prop >= 0.05)  # Only show locations with >=5%
+
+p4 <- ggplot(df_faceted, aes(x = reorder(Location, prop), y = prop, fill = Location)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~Activity, scales = "free_x") +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Top Locations for Most Common Activities",
+    subtitle = "Only showing locations with ≥5% frequency within each activity",
+    x = "Location",
+    y = "Proportion"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    strip.text = element_text(size = 9)
+  )
+
+print(p4)
+```
+
+# Prop of contexts across age
+```{r}
+filter_outliers_iqr <- function(data, value_col, factor = 1.5) {
+  values <- data[[value_col]]
+  
+  Q1 <- quantile(values, 0.25, na.rm = TRUE)
+  Q3 <- quantile(values, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - factor * IQR
+  upper_bound <- Q3 + factor * IQR
+  
+  return(data[values >= lower_bound & values <= upper_bound, ])
+}
+
+
+calculate_proportions <- function(df, group_var, subject_id_col = "subject_id", 
+                                 age_bin_col = "age_bin", total_frame_count_col = "total_frame_count") {
+  
+  # Calculate total hours by subject, group, and age
+  hours_data <- df |>
+    group_by(.data[[subject_id_col]], .data[[group_var]], .data[[age_bin_col]]) |>
+    summarize(total_hours = n()/3600, .groups = "drop")
+  
+  # Calculate proportions by subject
+  props_data <- df |>
+    ungroup() |>
+    summarize(
+      prop = n() / first(.data[[total_frame_count_col]]), 
+      hours = n()/3600,
+      .by = c(.data[[subject_id_col]], .data[[age_bin_col]], .data[[group_var]])
+    )
+  
+  return(list(hours_data = hours_data, props_data = props_data))
+}
+
+# Function to create summary statistics with confidence intervals
+create_summary_stats <- function(props_data, hours_data, group_var, 
+                                subject_id_col = "subject_id", age_bin_col = "age_bin") {
+  
+  # Join and calculate weighted confidence intervals
+  summary_data <- props_data |>
+    left_join(hours_data, 
+              by = setNames(c(subject_id_col, group_var, age_bin_col), 
+                           c(subject_id_col, group_var, age_bin_col))) |>
+    group_by(.data[[age_bin_col]], .data[[group_var]]) |>
+    group_modify(~ weighted_ci_normal_df(
+      .x,
+      value_col = "prop",
+      weight_col = "total_hours",
+      group_col = NULL
+    )) |>
+    ungroup() |>
+    # Add total hours for each age/group combination
+    left_join(
+      hours_data |>
+        group_by(.data[[age_bin_col]], .data[[group_var]]) |>
+        summarize(total_hours = sum(total_hours), .groups = "drop"),
+      by = setNames(c(age_bin_col, group_var), c(age_bin_col, group_var))
+    )
+  
+  return(summary_data)
+}
+
+# Main analysis function
+analyze_proportions_by_group <- function(df, 
+                                        group_var, 
+                                        total_frame_count_col = "total_frame_count",
+                                        subject_id_col = "subject_id", 
+                                        age_bin_col = "age_bin",
+                                        exclude_age_bins = NULL,
+                                        plot_title = NULL,
+                                        plot_color_label = NULL,
+                                        faceted = FALSE,
+                                        remove_outliers = FALSE,
+                                        outlier_factor = 1.5) {
+  
+  # Set default labels if not provided
+  if (is.null(plot_title)) {
+    plot_title <- paste(str_to_title(group_var), "Proportions Across Age Bins")
+  }
+  if (is.null(plot_color_label)) {
+    plot_color_label <- str_to_title(group_var)
+  }
+  
+  # Calculate proportions and hours
+  calc_results <- calculate_proportions(df, group_var, subject_id_col, age_bin_col, total_frame_count_col)
+  
+  # Create summary statistics
+  summary_data <- create_summary_stats(calc_results$props_data, calc_results$hours_data, 
+                                      group_var, subject_id_col, age_bin_col)
+  
+  # Apply age bin exclusions if specified
+  if (!is.null(exclude_age_bins)) {
+    summary_data <- summary_data |> filter(!.data[[age_bin_col]] %in% exclude_age_bins)
+    calc_results$props_data <- calc_results$props_data |> filter(!.data[[age_bin_col]] %in% exclude_age_bins)
+  }
+  
+  # Create the plot
+  p <- create_proportion_plot(summary_data, calc_results$props_data, group_var, 
+                             age_bin_col, plot_title, plot_color_label, faceted,
+                              remove_outliers, outlier_factor)
+  
+  # Return results
+  return(list(
+    summary = summary_data,
+    plot = p,
+    hours_data = calc_results$hours_data,
+    props_data = calc_results$props_data
+  ))
+}
+
+# Function to create the plot (handles both regular and faceted versions)
+create_proportion_plot <- function(summary_data, props_data, group_var, age_bin_col, 
+                                  plot_title, plot_color_label, faceted = FALSE,
+                                   remove_outliers = FALSE, outlier_factor = 1.5) {
+  
+  base_plot <- ggplot()
+  
+  if (faceted) {
+        facet_order <- summary_data %>%
+      dplyr::group_by(.data[[group_var]]) %>%
+      dplyr::summarise(avg_prop = mean(weighted_mean, na.rm = TRUE), .groups = "drop") %>%
+      dplyr::arrange(desc(avg_prop)) %>%
+      dplyr::pull(!!rlang::sym(group_var))
+  
+    props_data[[group_var]] <- factor(props_data[[group_var]], levels = facet_order)
+    summary_data[[group_var]] <- factor(summary_data[[group_var]], levels = facet_order)
+     if (remove_outliers) {
+      props_data <- filter_outliers_iqr(props_data, "prop", outlier_factor)
+     }
+    
+    # Add subject-level points for faceted version
+    base_plot <- base_plot +
+      geom_point(
+        data = props_data,
+        aes(
+          x = .data[[age_bin_col]],
+          y = prop,
+          size = hours,
+          color = .data[[group_var]]
+        ),
+        alpha = 0.4,
+        position = position_jitter(width = 0.2, height = 0)
+      )
+  }
+  
+  # Add group-level summary elements
+  base_plot <- base_plot +
+    geom_smooth(
+      data = summary_data,
+      aes(x = .data[[age_bin_col]], y = weighted_mean, 
+          group = .data[[group_var]], color = .data[[group_var]]),
+      method = "lm", se = FALSE, alpha = 0.5
+    ) +
+    geom_point(
+      data = summary_data,
+      aes(x = .data[[age_bin_col]], y = weighted_mean, 
+          color = .data[[group_var]], size = if(faceted) total_hours else NULL),
+      position = position_dodge(width = 0.3)
+    ) +
+    geom_errorbar(
+      data = summary_data,
+      aes(x = .data[[age_bin_col]], ymin = ci_lower, ymax = ci_upper,
+          color = .data[[group_var]]),
+      position = position_dodge(width = 0.3),
+      width = 0.2
+    )
+  
+  # Add faceting if requested
+  if (faceted) {
+    base_plot <- base_plot + 
+      facet_wrap(as.formula(paste("~", group_var)), scales = "free_y") +
+      labs(size = "Hours of Data")
+  }
+  
+  # Add common styling
+  base_plot <- base_plot +
+    labs(
+      x = "Age Bin",
+      y = "Proportion",
+      color = plot_color_label,
+      title = plot_title
+    ) +
+    theme_minimal()
+  
+  return(base_plot)
+}
+
+# Convenience wrapper functions for specific analyses
+analyze_location_proportions <- function(df, faceted = FALSE, ...) {
+  analyze_proportions_by_group(df, "Location", faceted = faceted, ...)
+}
+
+analyze_activity_proportions <- function(df, faceted = FALSE, ...) {
+  analyze_proportions_by_group(df, "Activity", faceted = faceted, ...)
+}
+```
+
+```{r}
+activity_facet_plot_by_subject <- function(activity_data, 
+                                            activities = c("playing", "watching tv", "reading", "eating"),
+                                            title = "Activity proportions across age and subjects with at least 3 age bins",
+                                            y = "Proportion") {
+  
+  # Get total hours per subject per age bin from hours_data
+  total_hours <- activity_data$hours_data |>
+    group_by(subject_id, age_bin) |>
+    summarize(total_hours = sum(total_hours), .groups = "drop")
+  
+  # Filter for specified activities and join with total hours
+  activity_props <- activity_data$props_data |>
+    filter(Activity %in% activities) |>
+    left_join(total_hours, by = c("subject_id", "age_bin")) |>
+    group_by(subject_id) |>
+    # Only keep subjects that have data for more than one age bin
+    filter(n_distinct(age_bin) > 2) |>
+    ungroup()
+  
+  # Lines connect true positions, points are jittered slightly
+  ggplot(activity_props, aes(x = age_bin, y = prop, group = subject_id, color = subject_id)) +
+    geom_line(alpha = 0.5) +
+    geom_jitter(aes(size = total_hours), alpha = 0.8, width = 0.1, height = 0) +
+    facet_wrap(~ Activity, scales = "free_y") +
+    labs(
+      title = title,
+      x = "Age Bin (months)",
+      y = "Proportion of activity detections",
+      size = "Total hours within age bin per subject"
+    ) +
+    theme_minimal() +
+    guides(color = "none")
+}
+
+subject_facet_plot_by_activity <- function(activity_data, 
+                                            activities = c("playing", "watching tv", "reading", "eating", "walking", "looking at device", "exploring"),
+                                            title = "Activity proportions across age and subjects with at least 3 age bins and 20 hours of data",
+                                            y = "Proportion") {
+  
+  # Get total hours per subject across all age bins
+  total_hours <- activity_data$hours_data |>
+    group_by(subject_id) |>
+    summarize(subject_total_hours = sum(total_hours), .groups = "drop")
+  
+  # Create "other" category for activities not in the specified list
+  activity_props <- activity_data$props_data |>
+    mutate(Activity_grouped = ifelse(Activity %in% activities, Activity, "other")) |>
+    # Sum up "other" activities by subject, age_bin
+    group_by(subject_id, age_bin, Activity_grouped) |>
+    summarize(
+      prop = sum(prop),
+      hours = sum(hours),
+      .groups = "drop"
+    ) |>
+    rename(Activity = Activity_grouped) |>
+    left_join(total_hours, by = "subject_id") |>
+    group_by(subject_id) |>
+    # Only keep subjects that have data for more than 2 age bins and >20 total hours
+    filter(n_distinct(age_bin) > 2 & subject_total_hours > 20) |>
+    ungroup() |>
+    mutate(subj_num = dense_rank(desc(subject_total_hours))) |>
+  arrange(subj_num) |>
+  mutate(
+    subject_label = paste0(
+      "Subj ", subj_num,
+      " | total hours: ", round(subject_total_hours, 1)
+    ),
+    # lock facet order by ranking
+    subject_label = factor(subject_label, levels = unique(subject_label))
+  )
+  
+  # Lines connect true positions, points are jittered slightly
+  ggplot(activity_props, aes(x = age_bin, y = prop, group = Activity, color = Activity)) +
+    geom_line(alpha = 0.5) +
+    geom_jitter(aes(size = hours), alpha = 0.8, width = 0.1, height = 0) +
+    facet_wrap(~ subject_label) +
+    labs(
+      title = title,
+      x = "Age Bin (months)",
+      y = "Proportion of activity detections",
+      size = "Hours per activity within age bin"
+    ) +
+    theme_minimal()
+}
+```
+
+
+```{r}
+location_results <- analyze_location_proportions(
+  contexts_avg, 
+  # max age
+  exclude_age_bins = "30-36",
+)
+location_results$plot
+
+location_faceted <- analyze_location_proportions(
+  contexts_avg, 
+  exclude_age_bins = "30-36",
+  faceted = TRUE,
+  remove_outliers=TRUE
+)
+location_faceted$plot
+
+# Replace your activity analysis (regular plot)
+activity_results <- analyze_activity_proportions(
+  contexts_avg, 
+  exclude_age_bins = "30-36"
+)
+activity_results$plot
+
+# Get the faceted version
+activity_faceted <- analyze_activity_proportions(
+  contexts_avg, 
+  exclude_age_bins = "30-36",
+  faceted = TRUE,
+  remove_outliers=FALSE
+)
+activity_faceted$plot
+```
+
+```{r}
+activity_facet <- activity_facet_plot_by_subject(activity_results)
+ggsave("activity_facet.png", activity_facet)
+subject_facet <- subject_facet_plot_by_activity(activity_results)
+ggsave("subject_facet.png", subject_facet, width=9)
+subject_facet
+```
+
+Postural only
+```{r}
+ggplot(activity_results$summary |> filter(age_bin != "30-36") |> filter(Activity %in% c("being held", "crawling", "walking", "lying down", "sitting")), aes(x = age_bin, y = weighted_mean, color = Activity)) +
+  geom_smooth(aes(group = Activity),
+    alpha = 0.5, se=FALSE) +
+    geom_point(method="lm", position = position_dodge(width = 0.3), aes(size=total_hours), alpha=0.7) +
+  geom_errorbar(
+    aes(ymin = ci_lower, ymax = ci_upper),
+    position = position_dodge(width = 0.3),
+    width = 0.2
+  ) +
+  labs(
+    x = "Age Bin",
+    y = "Proportion",
+    color = "Activity",
+    title = "Postural Proportions Across Age Bins"
+  ) +
+  theme_minimal()
+```
+
+crawling effect may still be interesting?
