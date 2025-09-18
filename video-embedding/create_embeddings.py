@@ -3,20 +3,28 @@
 Create video embeddings for videos in a directory using a pre-trained V-JEPA 2 model.
 
 conda activate babyview-pose
-cd /ccn2/u/khaiaw/Code/babyview-pose/contexts
+cd /ccn2/u/khaiaw/Code/babyview-pose/contexts/video-embedding/
 
-    --input_video_dir /ccn2a/dataset/babyview/2025.2/split_10s_clips_256p/ \
-    --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/babyview/ \
 
     --input_video_dir /ccn2/dataset/kinetics400/Kinetics400/k400/train/ \
     --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/kinetics_train/ \
         
-export CUDA_VISIBLE_DEVICES=2,4,7
-python video-embedding/create_embeddings.py \
-    --model_name facebook/vjepa2-vitl-fpc64-256 \
     --input_video_dir /ccn2/u/wanhee/datasets/gen2/egoexo4d/ns_process_mp4/video \
     --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/egoexo4d/ \
-    --num_processes 12 \
+
+    --input_video_dir /ccn2/dataset/SAYCam/ \
+    --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/SAYCam/ \
+
+    --input_video_dir /ccn2a/dataset/babyview/2025.2/split_10s_clips_256p/ \
+    --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/babyview/ \
+
+        
+export CUDA_VISIBLE_DEVICES=1
+python create_embeddings.py \
+    --input_video_dir /ccn2/dataset/ego4D/v1/chunked_resized/ \
+    --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/ego4D/ \
+    --model_name facebook/vjepa2-vitl-fpc64-256 \
+    --num_processes 4 \
     --debug \
 
 """
@@ -63,7 +71,7 @@ def create_video_embedding(args, video_url, processor, model):
     duration_seconds = vr.metadata.duration_seconds
     if duration_seconds < 5:
         return None
-    if duration_seconds > 10: # limit to first 10 seconds, otherwise the frames will be spaced too far apart
+    if duration_seconds > 12: # if the clip is longer than 12s, limit to first 10 seconds, otherwise the frames will be spaced too far apart
         num_total_frames = int(fps * 10) 
 
     # Sample frames linearly spaced throughout the video
