@@ -20,7 +20,7 @@ cd /ccn2/u/khaiaw/Code/babyview-pose/contexts/video-embedding/
 
         
 export CUDA_VISIBLE_DEVICES=1
-python create_embeddings.py \
+python hf_create_embeddings.py \
     --input_video_dir /ccn2/dataset/ego4D/v1/chunked_resized/ \
     --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/ego4D/ \
     --model_name facebook/vjepa2-vitl-fpc64-256 \
@@ -69,7 +69,7 @@ def create_video_embedding(args, video_url, processor, model):
     fps = vr.metadata.average_fps
     num_total_frames = vr.metadata.num_frames
     duration_seconds = vr.metadata.duration_seconds
-    if duration_seconds < 5:
+    if duration_seconds < 2:
         return None
     if duration_seconds > 12: # if the clip is longer than 12s, limit to first 10 seconds, otherwise the frames will be spaced too far apart
         num_total_frames = int(fps * 10) 
@@ -118,8 +118,14 @@ if __name__ == "__main__":
     args = get_args()
     args.out_dir = os.path.join(args.out_dir, args.model_name.replace('/', '_'))
 
+    # video_files = [
+    #     os.path.join(args.input_video_dir, file)
+    #     for file in os.listdir(args.input_video_dir)
+    #     if file.endswith('.mp4')
+    # ]
     video_files = glob.glob(os.path.join(args.input_video_dir, '**/*.mp4'), recursive=True)
     print(f'Found {len(video_files)} videos in {args.input_video_dir}')
+    np.random.shuffle(video_files)
     if args.debug:
         processor, model = get_model_and_processor(args)
         video_files = video_files[:3]
