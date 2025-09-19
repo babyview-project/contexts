@@ -18,6 +18,17 @@ cd /ccn2/u/khaiaw/Code/babyview-pose/contexts/video-embedding/
     --input_video_dir /ccn2a/dataset/babyview/2025.2/split_10s_clips_256p/ \
     --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/babyview/ \
 
+    --input_video_dir /ccn2/dataset/ego4D/v1/chunked_resized/ \
+    --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/ego4D/ \
+        
+    --input_video_dir /ccn2/dataset/Moments/Moments_in_Time_Raw/training \
+    --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/Moments_in_Time_Raw_training/ \
+
+    --input_video_dir /data2/klemenk/ssv2/ \
+    --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/ssv2/ \
+
+    --input_video_dir /ccn2a/dataset/physion/ \
+    --out_dir /ccn2a/dataset/babyview/2025.2/outputs/video_embeddings/physion/ \
         
 export CUDA_VISIBLE_DEVICES=1
 python hf_create_embeddings.py \
