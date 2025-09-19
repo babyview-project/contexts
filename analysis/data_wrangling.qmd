@@ -6,7 +6,10 @@ library(zoo)
 ```
 
 ```{r}
-df <- read.csv(here("data", "all_contexts.csv"))
+df <- read.csv(here("data", "all_contexts.csv")) |> mutate(superseded_gcp_name_feb25 = sub("_processed.*", "", video_id))
+
+# public version without descriptions for now
+write.csv(df |> select(-Video.description), here("data", "all_contexts_public.csv"))
 ```
 
 ```{r}
