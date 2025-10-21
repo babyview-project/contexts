@@ -7,13 +7,23 @@ library(zoo)
 
 ```{r}
 df <- read.csv(here("data", "all_contexts.csv")) |> mutate(superseded_gcp_name_feb25 = sub("_processed.*", "", video_id))
-
-# public version without descriptions for now
-write.csv(df |> select(-Video.description), here("data", "all_contexts_public.csv"))
+```
+Average number of clips per video
+```{r}
+df |>
+  count(superseded_gcp_name_feb25) |>   # gives counts per video
+  summarize(avg_clips = mean(n), sd_clips = sd(n), n=n())
 ```
 
 ```{r}
-df_cleaned <- df |>
+library(lubridate)
+
+recordings_processed_new <- read.csv(here("data", "recordings_processed_new.csv"))
+df_cleaned_full <- df |> left_join(recordings) |> filter(is.na(superseded_blackout_checkbox)) |> left_join(recordings_processed_new |> transmute(blackout_region_new=blackout_region, subject_id, date_time=mdy_hm(date_time, tz = "UTC")))
+```
+
+```{r}
+df_cleaned <- df_cleaned_full |>
   filter(Location != "") |>
   mutate(superseded_gcp_name_feb25 = sub("_processed.*", "", video_id),
          chunk_num = as.integer(sub(".*_(\\d+)\\.mp4", "\\1", basename(video_path))),
@@ -42,4 +52,6 @@ df_cleaned <- df |>
 
 ```{r}
 write.csv(df_cleaned, here("data", "all_contexts_cleaned.csv"))
+# public version without descriptions for now
+write.csv(df_cleaned |> select(video_id, Location, Activity, superseded_gcp_name_feb25, duration_sec, age_mo, start_time, end_time, locations_avg), here("data", "all_contexts_public.csv"))
 ```
