@@ -22,7 +22,7 @@ _set_seed(42)
 
 num_processes = 8
 
-overall_video_dir = '/ccn2/dataset/babyview/unzip_2025_10s_videos_256p/'
+overall_video_dir = '/home/tsepuri/contexts/test_chunks/' #'/ccn2/dataset/babyview/unzip_2025_10s_videos_256p/'
 
 prompt_key_values = {
     "Location": get_locations(),
