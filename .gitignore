@@ -10,3 +10,5 @@ outputs/
 .Rproj.user
 .Rdata
 .Rhistory
+annotations/node_modules
+annotations/clip_images/
