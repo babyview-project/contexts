@@ -25,9 +25,11 @@ num_processes = 8
 overall_video_dir = '/home/tsepuri/contexts/test_chunks/' #'/ccn2/dataset/babyview/unzip_2025_10s_videos_256p/'
 
 prompt_key_values = {
-    "Location": get_locations(),
-    "Activity": get_activities(),
-    "Video description": None
+    # "Location": get_locations(),
+    "PRIMARY ACTIVITY that the child wearing the camera is doing": get_activities(),
+    "OTHER ACTIVITIES happening in video": get_activities(),
+    # "Is anyone interacting with the child": ["Yes", "No"],
+    # "Video description": None
 }
 
 def create_question():
@@ -118,7 +120,7 @@ def get_model_responses_for_video_sublist(video_dir_sublist, chunk_id, out_vis_d
                     with open(out_model_response_path, 'w') as f:
                         for key in prompt_key_values.keys():
                             f.write(f"{key}: {response_dict[key]}\n")
-                        f.write("===== \nQuery: " + question)
+                        f.write("===== \nQuery: " + question.replace("<", "{").replace(">", "}") + "\n")
                         
             except Exception as e:
                 print(f"Error processing video {video_path}: {e}")
@@ -140,6 +142,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_processes', type=int, default=8, help='Number of parallel processes')
     parser.add_argument('--overwrite', action='store_true', help='Overwrite existing output files')
     args = parser.parse_args()
+    print(args)
     num_processes = args.num_processes
     bv_main_ids = get_bv_main_ids()
     print(len(bv_main_ids))
