@@ -25,6 +25,7 @@ class ConstrainedVideoLLaMALogitsProcessor:
             key_tokens = self.tokenizer.encode(key, add_special_tokens=False)
             self.key_token_sequences[key] = key_tokens
         
+        common_phrases = [":", "||", "/", " ", ".", ",", "\n", " || "]
         # Precompute value token sequences for constrained keys
         for key, values in prompt_key_values.items():
             if values is not None:  # Only for constrained keys
@@ -32,12 +33,9 @@ class ConstrainedVideoLLaMALogitsProcessor:
                 for value in values:
                     value_tokens = self.tokenizer.encode(value, add_special_tokens=False)
                     self.value_token_sequences[key][value] = value_tokens
-        
-        # Precompute common token sequences
-        common_phrases = [
-            ":", "||", "/", " ", ".", ",", "\n", 
-            " || ", "Location", "Activity", "Video", "description"
-        ]
+            #for key_token in key.split():
+            #    if key_token not in common_phrases:
+            #        common_phrases.append(key_token)
         for phrase in common_phrases:
             tokens = self.tokenizer.encode(phrase, add_special_tokens=False)
             self.common_token_sequences[phrase] = tokens
@@ -66,7 +64,6 @@ class ConstrainedVideoLLaMALogitsProcessor:
         # Get current state and valid next tokens
         current_state, context = self._get_current_state(input_ids, decoded_text)
         valid_next_tokens = self._get_valid_next_tokens(current_state, context)
-        
         if valid_next_tokens is not None:
             # Create mask that blocks all tokens except valid ones
             mask = torch.full_like(scores, float('-inf'))
@@ -98,16 +95,15 @@ class ConstrainedVideoLLaMALogitsProcessor:
                         "value": value, 
                         "position": remaining_position
                     }
-        
+        # Determine state based on complete decoded text
+        if decoded_text.strip() == "" or decoded_text.endswith("|| "):
+            return "expecting_key", {}
+               
         # Check if we're in the middle of generating common tokens (separators, etc.)
         for phrase, phrase_tokens in self.common_token_sequences.items():
             if self._is_partial_match(input_ids, phrase_tokens):
                 remaining_position = self._get_partial_match_position(input_ids, phrase_tokens)
                 return "generating_common", {"phrase": phrase, "position": remaining_position}
-        
-        # Determine state based on complete decoded text
-        if decoded_text.strip() == "" or decoded_text.endswith("|| "):
-            return "expecting_key", {}
         
         # Check if we just finished a key
         for key in self.prompt_key_values.keys():
