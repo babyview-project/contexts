@@ -12,3 +12,4 @@ outputs/
 .Rhistory
 annotations/node_modules
 annotations/clip_images/
+annotations/credentials

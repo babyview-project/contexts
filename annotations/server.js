@@ -18,15 +18,30 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:8080',
+  origin: process.env.CLIENT_URL || process.env.PORT,
   credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+try {
+  let credentials = process.env.CREDENTIALS_PATH || 'credentials/';
+  var privateKey  = fs.readFileSync(`${credentials}ssl_key.pem`),
+      certificate = fs.readFileSync(`${credentials}ssl_cert.pem`),
+      options     = {key: privateKey, cert: certificate},
+      server      = require('https').createServer(options,app).listen(PORT, '0.0.0.0', () => {
+  console.log(`✓ Server running on https://localhost:${PORT}`);
+  console.log(`✓ API available at https://localhost:${PORT}/api`);
+  console.log(`✓ Experiment at https://localhost:${PORT}/experiment`);
+});
+} catch (err) {
+  console.log("cannot find SSL certificates; falling back to http");
+  var server      = app.listen(PORT)
+}
+
 // Session configuration
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key-change-this',
+  secret: process.env.SESSION_SECRET || 'secret-key-temp',
   resave: false,
   saveUninitialized: false,
   store: MongoStore.create({
@@ -428,17 +443,17 @@ app.get('/api/options', basicAuth, (req, res) => {
     childActivities: [
       "dancing", "drawing", "drinking", "eating", "exploring", "gardening",
       "getting dressed", "looking at device", "music time", "nothing",
-      "nursing", "other", "playing", "standing", "walking", "watching tv", "reading"
+      "nursing", "other", "playing", "watching tv", "reading", "conversing"
     ],
     postures: [
-      "being held", "crawling", "lying down", "sitting", "walking"
+      "being held", "crawling", "lying down", "sitting", "walking", "standing"
     ],
     otherPersonTypes: ["adult", "child"],
     otherPersonActivities: [
       "cleaning", "cooking", "dancing", "drawing", "drinking", "eating",
       "exploring", "gardening", "getting dressed", "looking at device",
-      "music time", "nothing", "nursing", "other", "playing", "standing",
-      "walking", "watching tv", "reading"
+      "music time", "nothing", "nursing", "other", "playing",
+       "watching tv", "reading", "conversing", "crying"
     ],
     confidenceLevels: ["1", "2", "3"],
     ratingLevels: ["1", "2", "3", "4", "5"]

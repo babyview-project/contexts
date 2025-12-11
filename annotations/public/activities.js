@@ -4,7 +4,7 @@
 
 // Configuration
 const CONFIG = {
-    API_BASE: 'http://localhost:3000/api'
+    API_BASE: 'https://ucsdlearninglabs.org/bvannotations/api/'
 };
 
 // Global state
@@ -563,7 +563,7 @@ function createVideoTrial(videoIndex) {
                           Your browser does not support the video tag.
                         </video>
                       </div>
-                      <h4 style="text-align: center; margin-bottom: 30px;">Answer the following questions:</h4>
+                      <h4 style="text-align: center; margin-bottom: 30px;">Please make sure to scroll through all of the possible options within each dropdown before answering the following questions.</h4>
                     </div>`
                 },
           
