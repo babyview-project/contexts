@@ -13,8 +13,13 @@ import argparse
 from tqdm import tqdm
 
 """
-cd /home/tsepuri/contexts/inference
-python constrained_questions.py
+source /ccn2/u/khaiaw/miniconda3/etc/profile.d/conda.sh
+conda activate /ccn2/u/khaiaw/miniconda3/envs/babyview-pose
+
+cd /ccn2/u/khaiaw/Code/babyview-pose/contexts/inference
+python constrained_contexts.py \
+    --video_dir /ccn2/dataset/babyview/unzip_2025_10s_videos_256p/ \
+    --overwrite --output_path ./vis_model_predictions/2025_12_10/trying3
 """
 
 # transformers==4.51.1
@@ -27,7 +32,7 @@ overall_video_dir = '/home/tsepuri/contexts/test_chunks/' #'/ccn2/dataset/babyvi
 prompt_key_values = {
     # "Location": get_locations(),
     "PRIMARY ACTIVITY that the child wearing the camera is doing": get_activities(),
-    "OTHER ACTIVITIES happening in video": get_activities(),
+    "OTHER ACTIVITIES by other people in the video": get_activities(),
     # "Is anyone interacting with the child": ["Yes", "No"],
     # "Video description": None
 }
