@@ -24,19 +24,18 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+let server;
+
 try {
   let credentials = process.env.CREDENTIALS_PATH || 'credentials/';
   var privateKey  = fs.readFileSync(`${credentials}ssl_key.pem`),
       certificate = fs.readFileSync(`${credentials}ssl_cert.pem`),
-      options     = {key: privateKey, cert: certificate},
-      server      = require('https').createServer(options,app).listen(PORT, '0.0.0.0', () => {
-  console.log(`✓ Server running on https://localhost:${PORT}`);
-  console.log(`✓ API available at https://localhost:${PORT}/api`);
-  console.log(`✓ Experiment at https://localhost:${PORT}/experiment`);
-});
+      options     = {key: privateKey, cert: certificate};
+  server = require('https').createServer(options, app);
+  console.log('✓ Using HTTPS');
 } catch (err) {
-  console.log("cannot find SSL certificates; falling back to http");
-  var server      = app.listen(PORT)
+  console.log("✗ Cannot find SSL certificates; falling back to HTTP");
+  server = require('http').createServer(app);
 }
 
 // Session configuration
@@ -77,19 +76,11 @@ const AnnotationSchema = new mongoose.Schema({
   annotatorName: { type: String, required: true, index: true },
   videoFilename: { type: String, required: true, index: true },
   description: String,
-  childActivities: [String],
-  childActivityConfidence: { type: String, required: true },
-  otherPersonPresent: { type: String, required: true },
-  otherPersonType: [String],
-  otherPersonActivities: [String],
-  otherPersonConfidence: String,
-  sameSpace: String,
-  sameActivity: String,
-  childPosture: [String],
-  childPostureConfidence: { type: String, required: true },
-  locations: [String],
-  locationConfidence: { type: String, required: true },
-  descriptionRating: { type: String, required: true },
+  primaryActivity: { type: String, required: true },
+  primaryActivityConfidence: { type: String, required: true },
+  otherActivities: [String],
+  otherActivitiesConfidence: { type: String, required: true },
+  anyoneInteracting: { type: String, required: true },
   updatedAt: { type: Date, default: Date.now }
 });
 
@@ -233,67 +224,37 @@ app.post('/api/logout', basicAuth, (req, res) => {
 // ROUTES - Activity Annotations
 // ============================================================================
 
-// Parse CSV and return video list (videos handled client-side)
-app.post('/api/upload-csv', basicAuth, csvUpload.single('csvFile'), async (req, res) => {
+// Get existing annotations for video list
+app.post('/api/get-annotations-for-videos', basicAuth, async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+    const { videoFilenames } = req.body;
+    const annotatorName = req.session.annotatorName;
+    
+    if (!annotatorName) {
+      return res.status(401).json({ error: 'Not logged in' });
     }
 
-    const videos = [];
-    const filePath = req.file.path;
+    if (!videoFilenames || !Array.isArray(videoFilenames)) {
+      return res.status(400).json({ error: 'Video filenames array required' });
+    }
 
-    fs.createReadStream(filePath)
-      .pipe(csv())
-      .on('data', (row) => {
-        const videoFilename = row.video_filename || row.videoFilename;
-        videos.push({
-          videoFilename: videoFilename,
-          description: row.description || '',
-          order: parseInt(row.order) || videos.length + 1
-        });
-      })
-      .on('end', async () => {
-        // Clean up uploaded CSV file
-        fs.unlinkSync(filePath);
+    const existingAnnotations = await Annotation.find({
+      annotatorName,
+      videoFilename: { $in: videoFilenames }
+    });
 
-        // Sort by order
-        videos.sort((a, b) => a.order - b.order);
-
-        // Get existing annotations for this user
-        const annotatorName = req.session.annotatorName;
-        const videoFilenames = videos.map(v => v.videoFilename);
-        
-        const existingAnnotations = await Annotation.find({
-          annotatorName,
-          videoFilename: { $in: videoFilenames }
-        });
-
-        // Create a map of existing annotations
-        const annotationMap = {};
-        existingAnnotations.forEach(ann => {
-          annotationMap[ann.videoFilename] = ann;
-        });
-
-        // Add existing annotations to video data
-        videos.forEach(video => {
-          if (annotationMap[video.videoFilename]) {
-            video.existingAnnotation = annotationMap[video.videoFilename];
-          }
-        });
-        
-        res.json({ 
-          success: true, 
-          videos,
-          totalCount: videos.length
-        });
-      })
-      .on('error', (error) => {
-        fs.unlinkSync(filePath);
-        res.status(500).json({ error: error.message });
-      });
+    // Create a map of existing annotations
+    const annotationMap = {};
+    existingAnnotations.forEach(ann => {
+      annotationMap[ann.videoFilename] = ann;
+    });
+    
+    res.json({ 
+      success: true, 
+      annotations: annotationMap
+    });
   } catch (error) {
-    console.error('CSV upload error:', error);
+    console.error('Get annotations error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -334,25 +295,13 @@ app.post('/api/annotations', basicAuth, async (req, res) => {
       annotatorName,
       videoFilename: req.body.videoFilename,
       description: req.body.description || '',
-      childActivities: req.body.childActivities || [],
-      childActivityConfidence: req.body.childActivityConfidence,
-      otherPersonPresent: req.body.otherPersonPresent,
-      childPosture: req.body.childPosture,
-      childPostureConfidence: req.body.childPostureConfidence,
-      locations: req.body.locations || [],
-      locationConfidence: req.body.locationConfidence,
-      descriptionRating: req.body.descriptionRating,
+      primaryActivity: req.body.primaryActivity,
+      primaryActivityConfidence: req.body.primaryActivityConfidence,
+      otherActivities: req.body.otherActivities || [],
+      otherActivitiesConfidence: req.body.otherActivitiesConfidence,
+      anyoneInteracting: req.body.anyoneInteracting,
       updatedAt: new Date()
     };
-
-    // Add other person fields if present
-    if (req.body.otherPersonPresent === 'yes') {
-      annotationData.otherPersonType = req.body.otherPersonType;
-      annotationData.otherPersonActivities = req.body.otherPersonActivities || [];
-      annotationData.otherPersonConfidence = req.body.otherPersonConfidence;
-      annotationData.sameSpace = req.body.sameSpace;
-      annotationData.sameActivity = req.body.sameActivity;
-    }
 
     const result = await Annotation.findOneAndUpdate(
       { annotatorName, videoFilename: req.body.videoFilename },
@@ -408,9 +357,7 @@ app.get('/api/export', async (req, res) => {
     // Flatten arrays to comma-separated strings
     const flattenedAnnotations = annotations.map(ann => ({
       ...ann,
-      childActivities: (ann.childActivities || []).join('; '),
-      otherPersonActivities: (ann.otherPersonActivities || []).join('; '),
-      locations: (ann.locations || []).join('; ')
+      otherActivities: (ann.otherActivities || []).join('; ')
     }));
 
     const csvWriter = createObjectCsvWriter({
@@ -435,28 +382,12 @@ app.get('/api/export', async (req, res) => {
 // Get dropdown options
 app.get('/api/options', basicAuth, (req, res) => {
   res.json({
-    locations: [
-      "balcony", "bathroom", "bedroom", "car", "closet", "deck", "dining room",
-      "garage", "garden", "hallway", "kitchen", "laundry room", "living room",
-      "office", "outside", "stairway", "storage room", "other"
+    activities: [
+      "cleaning", "cooking", "conversing", "drawing", "drinking", "gardening", 
+      "getting dressed", "looking around", "meal time", "moving around",
+      "music time", "reading", "playing", "screen time", "other"
     ],
-    childActivities: [
-      "dancing", "drawing", "drinking", "eating", "exploring", "gardening",
-      "getting dressed", "looking at device", "music time", "nothing",
-      "nursing", "other", "playing", "watching tv", "reading", "conversing"
-    ],
-    postures: [
-      "being held", "crawling", "lying down", "sitting", "walking", "standing"
-    ],
-    otherPersonTypes: ["adult", "child"],
-    otherPersonActivities: [
-      "cleaning", "cooking", "dancing", "drawing", "drinking", "eating",
-      "exploring", "gardening", "getting dressed", "looking at device",
-      "music time", "nothing", "nursing", "other", "playing",
-       "watching tv", "reading", "conversing", "crying"
-    ],
-    confidenceLevels: ["1", "2", "3"],
-    ratingLevels: ["1", "2", "3", "4", "5"]
+    confidenceLevels: ["1", "2", "3"]
   });
 });
 
@@ -793,11 +724,12 @@ app.use('/api/clip-alignment/images', express.static(clipImagesDir));
 // START SERVER
 // ============================================================================
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✓ Server running on http://localhost:${PORT}`);
-  console.log(`✓ API available at http://localhost:${PORT}/api`);
-  console.log(`✓ Activity Annotations at http://localhost:${PORT}/experiment/index.html`);
-  console.log(`✓ Clip Alignment at http://localhost:${PORT}/experiment/clipalignment.html`);
+server.listen(PORT, '0.0.0.0', () => {
+  const protocol = server instanceof require('https').Server ? 'https' : 'http';
+  console.log(`✓ Server running on ${protocol}://localhost:${PORT}`);
+  console.log(`✓ API available at ${protocol}://localhost:${PORT}/api`);
+  console.log(`✓ Activity Annotations at ${protocol}://localhost:${PORT}/experiment/index.html`);
+  console.log(`✓ Clip Alignment at ${protocol}://localhost:${PORT}/experiment/clipalignment.html`);
 });
 
 module.exports = app;

@@ -52,33 +52,11 @@ async function apiCall(endpoint, options = {}) {
     }
 }
 
-async function uploadCSV(file) {
-    const formData = new FormData();
-    formData.append('csvFile', file);
-    
-    try {
-        const response = await fetch(CONFIG.API_BASE + '/upload-csv', {
-            method: 'POST',
-            body: formData,
-            credentials: 'include',
-            headers: {
-                'Authorization': getAuthHeader()
-            }
-        });
-        
-        if (!response.ok) {
-            if (response.status === 401) {
-                throw new Error('Authentication failed.');
-            }
-            const error = await response.json().catch(() => ({ error: 'Upload failed' }));
-            throw new Error(error.error || 'Upload failed');
-        }
-        
-        return response.json();
-    } catch (error) {
-        console.error('Upload Error:', error);
-        throw error;
-    }
+async function getAnnotationsForVideos(videoFilenames) {
+    return apiCall('/get-annotations-for-videos', {
+        method: 'POST',
+        body: JSON.stringify({ videoFilenames })
+    });
 }
 
 async function saveAnnotation(data) {
@@ -161,6 +139,7 @@ function updateProgressBar() {
     }
     if (completedText) {
         completedText.textContent = `Completed: ${completed} / ${total}`;
+        completedText.style.marginLeft = '5px';
     }
 }
 
@@ -279,37 +258,26 @@ timeline.push(nameScreen);
 
 // Global file storage (must be outside trial definition)
 window._videoFiles = null;
-window._csvFile = null;
 let filesUploaded = false;
-// Video and CSV Upload Screen
+// Video ZIP Upload Screen
 const fileUpload = {
     type: jsPsychHtmlButtonResponse,
     stimulus: `
         <div style="max-width: 700px; margin: auto; padding: 40px; background: white; border-radius: 12px;">            
+            <h2 style="text-align: center; margin-bottom: 20px;">Upload videos ZIP</h2>
+            
             <div style="background: #e3f2fd; padding: 15px; margin: 20px 0; border-radius: 8px; border-left: 4px solid #2196F3;">
-                <strong>Instructions:</strong>
-                CSV must contain: <code>video_filename</code>, <code>description</code>, optionally <code>order</code>. The <code>video_filename</code> in CSV should match your video filenames exactly including extension
+                <strong>Instructions:</strong> Upload a ZIP file containing all your video files. Videos will be automatically detected and sorted alphabetically.
             </div>
             
             <div style="margin: 25px 0;">
                 <label style="display: block; margin-bottom: 10px; font-weight: bold; font-size: 16px;">
-                    Select Video Files (or ZIP containing videos):
+                    Select ZIP File:
                 </label>
-                <input type="file" id="videoFiles" accept="video/*,.zip" multiple
+                <input type="file" id="videoZip" accept=".zip"
                        style="width: 100%; padding: 15px; border: 2px dashed #2196F3; border-radius: 8px; background: #f5f5f5;">
                 <div id="videoCount" style="margin-top: 10px; color: #666; font-size: 14px;">
-                    No videos selected
-                </div>
-            </div>
-            
-            <div style="margin: 25px 0;">
-                <label style="display: block; margin-bottom: 10px; font-weight: bold; font-size: 16px;">
-                    Select CSV File:
-                </label>
-                <input type="file" id="csvFile" accept=".csv"
-                       style="width: 100%; padding: 15px; border: 2px dashed #4CAF50; border-radius: 8px; background: #f5f5f5;">
-                <div id="csvIndicator" style="margin-top: 10px; color: #666; font-size: 14px;">
-                    No CSV selected
+                    No ZIP selected
                 </div>
             </div>
         </div>
@@ -317,53 +285,49 @@ const fileUpload = {
     choices: ['Continue'],
     button_html: '<button class="jspsych-btn" style="font-size: 18px; padding: 12px 30px;">%choice%</button>',
     on_load: function() {
-        const videoInput = document.getElementById('videoFiles');
-        const csvInput = document.getElementById('csvFile');
+        const zipInput = document.getElementById('videoZip');
         
-        if (videoInput) {
-            videoInput.addEventListener('change', async function(e) {
-                const files = e.target.files;
-                let allVideoFiles = [];
+        if (zipInput) {
+            zipInput.addEventListener('change', async function(e) {
+                const file = e.target.files[0];
                 
-                // Check if any file is a zip
-                for (let i = 0; i < files.length; i++) {
-                    const file = files[i];
-                    if (file.name.toLowerCase().endsWith('.zip')) {
-                        document.getElementById('videoCount').textContent = 'Extracting videos from ZIP...';
-                        document.getElementById('videoCount').style.color = '#FF9800';
-                        try {
-                            const extractedVideos = await extractVideosFromZip(file);
-                            allVideoFiles = allVideoFiles.concat(extractedVideos);
-                        } catch (error) {
-                            alert('Error extracting ZIP: ' + error.message);
-                            console.error(error);
-                        }
-                    } else if (file.type.startsWith('video/')) {
-                        allVideoFiles.push(file);
+                if (!file) return;
+                
+                if (!file.name.toLowerCase().endsWith('.zip')) {
+                    alert('Please select a ZIP file');
+                    return;
+                }
+                
+                document.getElementById('videoCount').textContent = 'Extracting videos from ZIP...';
+                document.getElementById('videoCount').style.color = '#FF9800';
+                
+                try {
+                    const extractedVideos = await extractVideosFromZip(file);
+                    
+                    // Sort videos alphabetically by filename
+                    extractedVideos.sort((a, b) => a.name.localeCompare(b.name));
+                    
+                    window._videoFiles = extractedVideos;
+                    const count = extractedVideos.length;
+                    
+                    if (count > 0) {
+                        const totalSize = extractedVideos.reduce((sum, f) => sum + f.size, 0);
+                        const sizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+                        document.getElementById('videoCount').textContent = 
+                            `✓ ${count} video(s) extracted (${sizeMB} MB)`;
+                        document.getElementById('videoCount').style.color = '#4CAF50';
+                        document.getElementById('videoCount').style.fontWeight = 'bold';
+                    } else {
+                        document.getElementById('videoCount').textContent = 
+                            '⚠ No videos found in ZIP';
+                        document.getElementById('videoCount').style.color = '#f44336';
                     }
-                }
-                
-                window._videoFiles = allVideoFiles;
-                const count = allVideoFiles.length;
-                if (count > 0) {
-                    const totalSize = allVideoFiles.reduce((sum, f) => sum + f.size, 0);
-                    const sizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+                } catch (error) {
+                    alert('Error extracting ZIP: ' + error.message);
+                    console.error(error);
                     document.getElementById('videoCount').textContent = 
-                        count + ' video(s) selected (' + sizeMB + ' MB)';
-                    document.getElementById('videoCount').style.color = '#4CAF50';
-                    document.getElementById('videoCount').style.fontWeight = 'bold';
-                }
-            });
-        }
-        
-        if (csvInput) {
-            csvInput.addEventListener('change', function(e) {
-                window._csvFile = e.target.files;
-                if (e.target.files.length > 0) {
-                    document.getElementById('csvIndicator').textContent = 
-                        '✓ CSV file selected: ' + e.target.files[0].name;
-                    document.getElementById('csvIndicator').style.color = '#4CAF50';
-                    document.getElementById('csvIndicator').style.fontWeight = 'bold';
+                        '✗ Error extracting ZIP';
+                    document.getElementById('videoCount').style.color = '#f44336';
                 }
             });
         }
@@ -371,7 +335,6 @@ const fileUpload = {
     on_finish: function(data) {
         // Store files for processing in next trial
         data.videoFiles = window._videoFiles;
-        data.csvFiles = window._csvFile;
     }
 };
 
@@ -380,45 +343,50 @@ const processFiles = {
     async: true,
     func: function(done) {
         const videoFiles = window._videoFiles;
-        const csvFiles = window._csvFile;
         
         if (!videoFiles || videoFiles.length === 0) {
-            alert('Please select video files before continuing');
+            alert('Please select a ZIP file with videos before continuing');
             return;
         }
         
-        if (!csvFiles || csvFiles.length === 0) {
-            alert('Please select a CSV file before continuing');
-            return;
-        }
         filesUploaded = true;
-        // Create video blobs
-        for (let i = 0; i < videoFiles.length; i++) {
-            const file = videoFiles[i];
+        
+        // Create video blobs and build video data
+        videoFiles.forEach((file, idx) => {
             const blobUrl = URL.createObjectURL(file);
             videoBlobs[file.name] = blobUrl;
-        }
+            
+            videosData.push({
+                videoFilename: file.name,
+                description: '',
+                order: idx + 1
+            });
+        });
         
-        // Process CSV
-        uploadCSV(csvFiles[0])
-            .then((csvResult) => {
-                console.log(csvResult);
-                csvResult.videos.forEach((video, idx) => {
-                    if (videoBlobs.hasOwnProperty(video.videoFilename)) {
-                        videosData.push(video)
+        // Get existing annotations for these videos
+        const videoFilenames = videosData.map(v => v.videoFilename);
+        
+        getAnnotationsForVideos(videoFilenames)
+            .then((result) => {
+                const annotationMap = result.annotations;
+                
+                // Add existing annotations to video data
+                videosData.forEach((video, idx) => {
+                    if (annotationMap[video.videoFilename]) {
+                        video.existingAnnotation = annotationMap[video.videoFilename];
+                        completedVideos.add(idx);
                     }
-                })
+                });
                 
                 // Find the last contiguous annotated video
                 let lastAnnotatedIndex = -1;
-                videosData.forEach((video, idx) => {
-                    if (video.existingAnnotation) {
-                        completedVideos.add(idx);
-                        if (idx == lastAnnotatedIndex + 1) {
-                            lastAnnotatedIndex = idx;
-                        }
+                for (let i = 0; i < videosData.length; i++) {
+                    if (completedVideos.has(i)) {
+                        lastAnnotatedIndex = i;
+                    } else {
+                        break;
                     }
-                });
+                }
                 
                 // Set current video to the one after the last annotated, or 0 if none annotated
                 currentVideoIndex = lastAnnotatedIndex + 1;
@@ -426,6 +394,7 @@ const processFiles = {
                     currentVideoIndex = 0;
                 }
                 
+                console.log(`Loaded ${videosData.length} videos, starting at index ${currentVideoIndex}`);
                 done({ success: true, videosData: videosData, startIndex: currentVideoIndex });
             })
             .catch((error) => {
@@ -507,328 +476,337 @@ const buildVideoTimeline = {
 timeline.push(buildVideoTimeline);
 
 // Create video annotation trials
-function getProgressBarHTML(videoIndex) {
-    const completed = completedVideos.size;
-    const total = videosData.length;
-    const progress = (completed / total) * 100;
-    
-    return `
-        <div style="background: #f5f5f5; padding: 15px; margin-bottom: 20px; border-radius: 8px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                <strong>Video: ${videoIndex + 1} / ${total}</strong>
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <label style="margin: 0; font-size: 14px;">Jump to video:</label>
-                    <input type="number" id="jump-to-video" min="1" max="${total}" 
-                           placeholder="${videoIndex + 1}" 
-                           style="width: 80px; padding: 5px; border: 2px solid #2196F3; border-radius: 4px; font-size: 14px;">
-                    <button id="jump-button" style="padding: 5px 15px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
-                        Go
-                    </button>
-                    <button id="quit-button" style="padding: 5px 15px; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">
-                        Quit
-                    </button>
-                </div>
-                <strong data-progress-completed>Completed: ${completed} / ${total}</strong>
-            </div>
-            <div style="background: #ddd; border-radius: 10px; overflow: hidden; height: 30px; position: relative;">
-                <div style="width: ${progress}%; height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A); transition: width 0.3s;" id="progress-bar-fill"></div>
-                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-weight: bold; color: #333; z-index: 10;">
-                    ${Math.round(progress)}%
-                </div>
-            </div>
-        </div>
-    `;
-}
-
 function createVideoTrial(videoIndex) {
     const video = videosData[videoIndex];
     const videoUrl = videoBlobs[video.videoFilename];
     
-    // Survey trial with video embedded
+    // Survey trial with integrated layout
     const surveyTrial = {
-            type: jsPsychSurvey,
-            survey_json: {
-              showQuestionNumbers: "off",
-              elements: [
+        type: jsPsychSurvey,
+        survey_json: {
+            showQuestionNumbers: "off",
+            elements: [
                 {
-                  type: "html",
-                  name: "video_html",
-                  html: `
-                   ${getProgressBarHTML(videoIndex)}
-                   <br>
-                    <div style="max-width: 900px; margin: auto;">
-                      <div style="background: #000; padding: 20px; border-radius: 8px; margin-bottom: 30px; text-align: center;">
-                        <video width="800" controls autoplay style="max-width: 60%;">
-                          <source src="${videoUrl}" type="video/mp4">
-                          Your browser does not support the video tag.
-                        </video>
-                      </div>
-                      <h4 style="text-align: center; margin-bottom: 30px;">Please make sure to scroll through all of the possible options within each dropdown before answering the following questions.</h4>
-                    </div>`
+                    type: "html",
+                    name: "video_and_progress",
+                    html: `
+                        <style>
+                            .video-annotation-container {
+                                display: flex;
+                                gap: 12px;
+                                max-width: 100%;
+                                padding: 10px;
+                                height: 77vh;
+                            }
+                            .video-section {
+                                flex: 0 0 60%;
+                                display: flex;
+                                flex-direction: column;
+                                gap: 8px;
+                            }
+                            .questions-section {
+                                flex: 0 0 40%;
+                                padding: 10px;
+                                background: #f5f5f5;
+                                border-radius: 8px;
+                                overflow-y: auto;
+                                max-height: 75vh;
+                                display: flex;
+                                flex-direction: column;
+                            }
+                            .progress-bar-container {
+                                background: white;
+                                padding: 8px;
+                                border-radius: 8px;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                            }
+                            .video-player {
+                                background: #000;
+                                padding: 10px;
+                                border-radius: 8px;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                                max-height: 75vh;
+                                aspect-ratio: 512 / 910;
+                            }
+                            .video-player video {
+                                width: 100%;
+                                max-height: 74vh;
+                                aspect-ratio: 512 / 910;
+                                object-fit: contain;
+                            }
+                            .progress-controls {
+                                display: flex;
+                                justify-content: space-between;
+                                align-items: center;
+                                margin-bottom: 10px;
+                            }
+                            .jump-controls {
+                                display: flex;
+                                align-items: center;
+                                gap: 10px;
+                            }
+                            .jump-controls input {
+                                width: 80px;
+                                padding: 5px;
+                                border: 2px solid #2196F3;
+                                border-radius: 4px;
+                                font-size: 14px;
+                            }
+                            .jump-controls button {
+                                padding: 5px 15px;
+                                border: none;
+                                border-radius: 4px;
+                                cursor: pointer;
+                                font-size: 14px;
+                                color: white !important;
+                            }
+                            .jump-button {
+                                background: #2196F3 !important;
+                            }
+                            .jump-button:hover {
+                                background: #1976D2 !important;
+                            }
+                            .quit-button {
+                                background: #f44336 !important;
+                            }
+                            .quit-button:hover {
+                                background: #d32f2f !important;
+                            }
+                            .progress-bar {
+                                background: #ddd;
+                                border-radius: 10px;
+                                overflow: hidden;
+                                height: 30px;
+                                position: relative;
+                            }
+                            .progress-bar-fill {
+                                height: 100%;
+                                background: linear-gradient(90deg, #4CAF50, #8BC34A);
+                                transition: width 0.3s;
+                            }
+                            .progress-text {
+                                position: absolute;
+                                top: 50%;
+                                left: 50%;
+                                transform: translate(-50%, -50%);
+                                font-weight: bold;
+                                color: #333;
+                                z-index: 10;
+                            }
+                            .questions-section h3 {
+                                margin-top: 0;
+                                margin-bottom: 8px;
+                                font-size: 16px;
+                            }
+                            .sd-question {
+                                margin-bottom: 8px !important;
+                                padding-bottom: 4px !important;
+                            }
+                            .sd-question__title {
+                                font-size: 13px !important;
+                                margin-bottom: 4px !important;
+                                line-height: 1.3 !important;
+                            }
+                            .sd-input,
+                            .sd-dropdown,
+                            .sd-tagbox {
+                                font-size: 13px !important;
+                                padding: 4px 6px !important;
+                            }
+                            .sd-element {
+                                padding: 10px !important;
+                            }
+                            .sd-row {
+                                padding: 10px !important;
+                            }
+                            .sd-element--with-frame {
+                                padding: 6px !important;
+                                margin-bottom: 6px !important;
+                            }
+                            .sd-row__question {
+                                padding: 10px !important;
+                            }
+                            .sd-row__question--small {
+                                padding: 10px !important;
+                            }
+                            .jspsych-question-root {
+                                padding: 10px !important;
+                                margin: 0 !important;
+                            }
+                            /* Make submit button more compact */
+                            .sd-action-bar {
+                                padding-top: 8px !important;
+                                margin-top: 8px !important;
+                            }
+                            .sd-btn {
+                                padding: 8px 16px !important;
+                                font-size: 14px !important;
+                            }
+                        </style>
+                        
+                        <div class="video-annotation-container">
+                            <div class="video-section">
+                                <div class="progress-bar-container">
+                                    <div class="progress-controls">
+                                        <strong>Video: ${videoIndex + 1} / ${videosData.length}</strong>
+                                        <div class="jump-controls">
+                                            <label style="margin: 0; font-size: 14px;">Jump to:</label>
+                                            <input type="number" id="jump-to-video" min="1" max="${videosData.length}" 
+                                                   placeholder="${videoIndex + 1}">
+                                            <button class="jump-button" id="jump-button">Go</button>
+                                            <button class="quit-button" id="quit-button">Quit</button>
+                                        </div>
+                                        <strong data-progress-completed>Completed: ${completedVideos.size} / ${videosData.length}</strong>
+                                    </div>
+                                    <div class="progress-bar">
+                                        <div class="progress-bar-fill" id="progress-bar-fill" style="width: ${(completedVideos.size / videosData.length) * 100}%"></div>
+                                        <div class="progress-text">${Math.round((completedVideos.size / videosData.length) * 100)}%</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="video-player">
+                                    <video controls autoplay>
+                                        <source src="${videoUrl}" type="video/mp4">
+                                        Your browser does not support the video tag.
+                                    </video>
+                                </div>
+                            </div>
+                            
+                            <div class="questions-section" id="questions-container-${videoIndex}">
+                                <h3 style="margin-top: 0;">Annotation Questions</h3>
+                            </div>
+                        </div>
+                        
+                        <div id="questions-placeholder"></div>
+                    `
                 },
-          
+                
                 /* ───────────────────────────────
-                   1. What is the child doing?
+                   Questions (will appear in side panel)
                 ─────────────────────────────── */
                 {
-                  type: "tagbox",
-                  name: "childActivities",
-                  title: "1. What is the child doing?",
-                  placeholder: "Search activities...",
-                  isRequired: true,
-                  choices: dropdownOptions.childActivities,   
+                    type: "dropdown",
+                    name: "primaryActivity",
+                    title: "1. What is the primary activity that the child wearing the camera is doing?",
+                    placeholder: "Select primary activity...",
+                    isRequired: true,
+                    choices: dropdownOptions.activities,   
                 },
                 {
-                  type: "dropdown",
-                  name: "childActivityConfidence",
-                  title: "1a. How confident are you?",
-                  isRequired: true,
-                  choices: [
-                    { value: "1", text: "1 - Low" },
-                    { value: "2", text: "2 - Medium" },
-                    { value: "3", text: "3 - High" }
-                  ]
+                    type: "text",
+                    name: "primaryActivityOther",
+                    title: "Please specify the primary activity:",
+                    isRequired: true,
+                    visibleIf: "{primaryActivity} = 'other'"
                 },
-          
-                /* ───────────────────────────────
-                   2. Is another human present?
-                ─────────────────────────────── */
                 {
-                  type: "dropdown",
-                  name: "otherPersonPresent",
-                  title: "2. Is there another human being?",
-                  isRequired: true,
-                  choices: ["yes", "no"]
-                },
-          
-                {
-                  type: "panel",
-                  name: "other_person_panel",
-                  visibleIf: "{otherPersonPresent} = 'yes'",
-                  title: "Questions about the other person",
-                  elements: [
-                    {
-                      type: "tagbox",
-                      name: "otherPersonType",
-                      title: "2a. Who is it?",
-                      isRequired: true,
-                      choices: dropdownOptions.otherPersonTypes
-                    },
-                    {
-                      type: "tagbox",
-                      name: "otherPersonActivities",
-                      title: "2b. What are they doing?",
-                      placeholder: "Search...",
-                      choices: dropdownOptions.otherPersonActivities
-                    },
-                    {
-                      type: "dropdown",
-                      name: "otherPersonConfidence",
-                      title: "2c. How confident are you?",
-                      isRequired: true,
-                      choices: [
+                    type: "dropdown",
+                    name: "primaryActivityConfidence",
+                    title: "2. How confident are you?",
+                    isRequired: true,
+                    choices: [
                         { value: "1", text: "1 - Low" },
                         { value: "2", text: "2 - Medium" },
                         { value: "3", text: "3 - High" }
-                      ]
-                    },
-                    {
-                      type: "dropdown",
-                      name: "sameSpace",
-                      title: "2d. Are they in the same space as the child?",
-                      choices: ["yes", "no"]
-                    },
-                    {
-                      type: "dropdown",
-                      name: "sameActivity",
-                      title: "2e. Are they engaged in the same activity?",
-                      choices: ["yes", "no"]
-                    }
-                  ]
-                },
-          
-                /* ───────────────────────────────
-                   3. Child posture
-                ─────────────────────────────── */
-                {
-                  type: "tagbox",
-                  name: "childPosture",
-                  title: "3. Child posture?",
-                  placeholder: "Search postures...",
-                  isRequired: true,
-                  choices: dropdownOptions.postures
+                    ]
                 },
                 {
-                  type: "dropdown",
-                  name: "childPostureConfidence",
-                  title: "3a. Confidence?",
-                  isRequired: true,
-                  choices: [
-                    { value: "1", text: "1 - Low" },
-                    { value: "2", text: "2 - Medium" },
-                    { value: "3", text: "3 - High" }
-                  ]
-                },
-          
-                /* ───────────────────────────────
-                   4. Location
-                ─────────────────────────────── */
-                {
-                  type: "tagbox",
-                  name: "locations",
-                  title: "4. Location?",
-                  isRequired: true,
-                  placeholder: "Search locations...",
-                  choices: dropdownOptions.locations
+                    type: "tagbox",
+                    name: "otherActivities",
+                    title: "3. What other activities is the child wearing the camera doing? [multi-select]",
+                    placeholder: "Search and select activities...",
+                    isRequired: true,
+                    choices: [...dropdownOptions.activities, "none"]
                 },
                 {
-                  type: "dropdown",
-                  name: "locationConfidence",
-                  title: "4a. Confidence?",
-                  isRequired: true,
-                  choices: [
-                    { value: "1", text: "1 - Low" },
-                    { value: "2", text: "2 - Medium" },
-                    { value: "3", text: "3 - High" }
-                  ]
+                    type: "text",
+                    name: "otherActivitiesOther",
+                    title: "Please specify the other activities (comma-separated if multiple):",
+                    isRequired: true,
+                    visibleIf: "{otherActivities} contains 'other'"
+                },
+                {
+                    type: "dropdown",
+                    name: "otherActivitiesConfidence",
+                    title: "4. How confident are you?",
+                    isRequired: true,
+                    choices: [
+                        { value: "1", text: "1 - Low" },
+                        { value: "2", text: "2 - Medium" },
+                        { value: "3", text: "3 - High" }
+                    ]
+                },
+                {
+                    type: "dropdown",
+                    name: "anyoneInteracting",
+                    title: "5. Is anyone interacting with the child?",
+                    isRequired: true,
+                    choices: ["yes", "no"]
                 }
-              ]
-            },
-            choices: ["Save & Continue", "Skip"],
-            survey_function: function(survey) {
-                survey.data = video.existingAnnotation
-            },
-            on_load: function() {
-                // Add handler for jump and quit buttons
-                setTimeout(() => {
-                    const jumpButton = document.getElementById('jump-button');
-                    const jumpInput = document.getElementById('jump-to-video');
-                    const quitButton = document.getElementById('quit-button');
-                    
-                    const handleJump = () => {
-                        const targetVideoNum = parseInt(jumpInput.value);
-                        if (isNaN(targetVideoNum) || targetVideoNum < 1 || targetVideoNum > videosData.length) {
-                            alert(`Please enter a valid video number between 1 and ${videosData.length}`);
-                            return;
-                        }
-                        
-                        const targetIndex = targetVideoNum - 1; // Convert to 0-based index
-                        
-                        if (targetIndex !== videoIndex) {
-                            // End current timeline and rebuild from target
-                            jsPsych.endCurrentTimeline();
-                            new_timeline = []
-                            // Add videos starting from target index
-                            for (let i = targetIndex; i < videosData.length; i++) {
-                                const videoTrialSet = createVideoTrial(i);
-                                jsPsych.addNodeToEndOfTimeline(videoTrialSet);
-                                new_timeline.push(videoTrialSet)
-                            }
-                            new_timeline.push(finalScreen)
-                            jsPsych.run(new_timeline)
-                        }
-                    };
-                    
-                    const handleQuit = () => {
-                        if (confirm('Are you sure you want to quit? Your progress has been saved.')) {
-                            // End current timeline and jump to final screen
-                            jsPsych.endCurrentTimeline();
-                            jsPsych.run([finalScreen]);
-                        }
-                    };
-                    
-                    if (jumpButton) {
-                        jumpButton.addEventListener('click', handleJump);
-                    }
-                    
-                    if (quitButton) {
-                        quitButton.addEventListener('click', handleQuit);
-                    }
-                    
-                    if (jumpInput) {
-                        jumpInput.addEventListener('keypress', function(e) {
-                            if (e.key === 'Enter') {
-                                handleJump();
-                            }
-                        });
-                    }
-                }, 100);
-            },
-        on_finish: async function(data) {            
-            // Get the data that was stored during on_load
-            const trialData = data.response;
-            
-            // Build annotation data object
-            const annotationData = {
-                videoFilename: video.videoFilename,
-                description: video.description,
-                ...trialData
-            };
-            
-            try {
-                video.existingAnnotation = annotationData;
-                await saveAnnotation(annotationData);
-                completedVideos.add(videoIndex);
-                showSaveIndicator();
-                // Update progress bar dynamically
-                updateProgressBar();
-                console.log('Saved:', video.videoFilename);
-            } catch (error) {
-                alert('Failed to save: ' + error.message);
-            }
-        }
-    };
-    
-    const surveyDescriptionTrial = {
-        type: jsPsychSurvey,
-        survey_json: {
-          showQuestionNumbers: "off",
-          elements: [
-            {
-              type: "html",
-              name: "video_html",
-              html: `
-               ${getProgressBarHTML(videoIndex)}
-               <br>
-                <div style="max-width: 900px; margin: auto;">
-                  <div style="background: #000; padding: 20px; border-radius: 8px; margin-bottom: 30px; text-align: center;">
-                    <video width="800" controls autoplay style="max-width: 60%;">
-                      <source src="${videoUrl}" type="video/mp4">
-                      Your browser does not support the video tag.
-                    </video>
-                  </div>
-      
-                  <div style="background: #e8f5e9; padding: 20px; border-radius: 8px; border-left: 5px solid #4CAF50; margin-bottom: 30px;">
-                    <h3 style="margin-top: 0;">Video Description</h3>
-                    <p style="font-size: 16px; line-height: 1.6;">
-                      ${video.description || "No description available"}
-                    </p>
-                  </div>
-      
-                  <h4 style="text-align: center; margin-bottom: 30px;">Answer the following questions:</h4>
-                </div>`
-            },
-      
-            /* ───────────────────────────────
-               5. Rate description
-            ─────────────────────────────── */
-            {
-              type: "rating",
-              name: "descriptionRating",
-              title: "Rate description (1–5)",
-              isRequired: true,
-              minRateDescription: "Poor",
-              maxRateDescription: "Excellent",
-              rateMin: 1,
-              rateMax: 5
-            }
-          ]
+            ]
         },
         survey_function: function(survey) {
-            console.log(video.existingAnnotation)
-            survey.data = video.existingAnnotation
+            survey.data = video.existingAnnotation;
+            survey.onValueChanged.add(function(sender, options) {
+                if (options.name === "primaryActivity") {
+                    const primaryActivityOther = sender.getQuestionByName("primaryActivityOther");
+                    if (primaryActivityOther) {
+                        primaryActivityOther.visible = (options.value === "other");
+                    }
+                }
+                
+                if (options.name === "otherActivities") {
+                    const otherActivitiesOther = sender.getQuestionByName("otherActivitiesOther");
+                    if (otherActivitiesOther) {
+                        const hasOther = options.value && options.value.includes("other");
+                        otherActivitiesOther.visible = hasOther;
+                    }
+                }
+            });
+            // Move questions into the side panel after render
+            survey.onAfterRenderSurvey.add(function(sender) {
+                setTimeout(() => {
+                    const questionsSection = document.getElementById(`questions-container-${videoIndex}`);
+                    const questionsPlaceholder = document.getElementById('questions-placeholder');
+                    
+                    if (!questionsSection) {
+                        console.log('Could not find questions section');
+                        return;
+                    }
+                    
+                    // Get all question rows (skip the first HTML element)
+                    const allRows = document.querySelectorAll('.sd-row');
+                    console.log('Found rows:', allRows.length);
+                    
+                    // Move questions (all rows except first one which is video/progress)
+                    allRows.forEach((row, index) => {
+                        if (index > 0) { // Skip first row (video HTML)
+                            questionsSection.appendChild(row);
+                        }
+                    });
+                    
+                    // Remove the placeholder
+                    if (questionsPlaceholder && questionsPlaceholder.parentNode) {
+                        questionsPlaceholder.parentNode.removeChild(questionsPlaceholder);
+                    }
+                }, 200);
+            });
+            
+            // Handle dynamic question rendering (for conditional questions)
+            survey.onAfterRenderQuestion.add(function(sender, options) {
+                setTimeout(() => {
+                    const questionsSection = document.getElementById(`questions-container-${videoIndex}`);
+                    if (questionsSection && options.htmlElement) {
+                        const row = options.htmlElement.closest('.sd-row');
+                        if (row && row.parentNode !== questionsSection) {
+                            questionsSection.appendChild(row);
+                        }
+                    }
+                }, 50);
+            });
         },
-        choices: ["Save & Continue", "Skip"],
         on_load: function() {
             // Add handler for jump and quit buttons
             setTimeout(() => {
@@ -843,13 +821,11 @@ function createVideoTrial(videoIndex) {
                         return;
                     }
                     
-                    const targetIndex = targetVideoNum - 1; // Convert to 0-based index
+                    const targetIndex = targetVideoNum - 1;
                     
                     if (targetIndex !== videoIndex) {
-                        // End current timeline and rebuild from target
                         jsPsych.endCurrentTimeline();
                         new_timeline = []
-                        // Add videos starting from target index
                         for (let i = targetIndex; i < videosData.length; i++) {
                             const videoTrialSet = createVideoTrial(i);
                             jsPsych.addNodeToEndOfTimeline(videoTrialSet);
@@ -862,18 +838,21 @@ function createVideoTrial(videoIndex) {
                 
                 const handleQuit = () => {
                     if (confirm('Are you sure you want to quit? Your progress has been saved.')) {
-                        // End current timeline and jump to final screen
                         jsPsych.endCurrentTimeline();
                         jsPsych.run([finalScreen]);
                     }
                 };
                 
                 if (jumpButton) {
+                    jumpButton.removeEventListener('click', handleJump);
                     jumpButton.addEventListener('click', handleJump);
+                    console.log('Jump button handler attached');
                 }
                 
                 if (quitButton) {
+                    quitButton.removeEventListener('click', handleQuit);
                     quitButton.addEventListener('click', handleQuit);
+                    console.log('Quit button handler attached');
                 }
                 
                 if (jumpInput) {
@@ -883,13 +862,11 @@ function createVideoTrial(videoIndex) {
                         }
                     });
                 }
-            }, 100);
+            }, 500);
         },
-        on_finish: async function(data) {
-            // Get the data that was stored during on_load
+        on_finish: async function(data) {            
             const trialData = data.response;
             
-            // Build annotation data object
             const annotationData = {
                 videoFilename: video.videoFilename,
                 description: video.description,
@@ -897,11 +874,10 @@ function createVideoTrial(videoIndex) {
             };
             
             try {
+                video.existingAnnotation = annotationData;
                 await saveAnnotation(annotationData);
                 completedVideos.add(videoIndex);
                 showSaveIndicator();
-                video.existingAnnotation = annotationData;
-                // Update progress bar dynamically
                 updateProgressBar();
                 console.log('Saved:', video.videoFilename);
             } catch (error) {
@@ -911,7 +887,7 @@ function createVideoTrial(videoIndex) {
     };
 
     return {
-        timeline: [surveyTrial, surveyDescriptionTrial]
+        timeline: [surveyTrial]
     };
 }
 
