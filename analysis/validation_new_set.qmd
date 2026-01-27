@@ -1,0 +1,329 @@
+---
+title: "validation_2"
+format: html
+toc: true
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(glue)
+library(tidytext)
+library(irr)
+library(psych)
+```
+
+```{r}
+annotations <- read.csv(here("data/completed_annotations/activity_annotations.csv"))
+df_cleaned <- read.csv(here("data/all_contexts_cleaned.csv"))
+annotators = c("elenahc", "m1deng")
+```
+
+```{r}
+cleaned_annotations <- annotations |> filter(annotatorName %in% annotators) 
+main_annotations <- cleaned_annotations |> filter(isTraining != "true")
+
+main_annotations$all_activities <- apply(main_annotations, 1, function(row) {
+  acts <- unlist(row[c("primaryActivity", str_trim(paste0("otherActivities.", 0:2, ".")))])
+  acts <- acts[!is.na(acts) & acts != ""]
+  list(acts)  
+})
+```
+
+# confusion matrices
+-- anyone interacting
+```{r}
+# Reshape data to wide format for pairwise comparisons
+interaction_wide <- main_annotations %>%
+  select(videoFilename, annotatorName, anyoneInteracting) %>%
+  pivot_wider(
+    names_from = annotatorName,
+    values_from = anyoneInteracting,
+    names_prefix = "interaction_"
+  )
+
+primary_activity_wide <- main_annotations %>%
+  select(videoFilename, annotatorName, primaryActivity) %>%
+  pivot_wider(
+    names_from = annotatorName,
+    values_from = primaryActivity,
+    names_prefix = "primary_"
+  )
+
+# Get all unique categories
+all_interactions <- unique(main_annotations$anyoneInteracting)
+all_primary_activities <- unique(main_annotations$primaryActivity)
+
+print("=== ANYONE INTERACTING ===")
+
+create_pairwise_comparisons_single <- function(data, columns) {
+  # Create all possible pairs without duplicates
+  pairs <- combn(columns, 2, simplify = FALSE)
+  
+  # For each pair, create comparison in one direction only
+  map_dfr(pairs, function(pair) {
+    data.frame(
+      actual = data[[pair[1]]],
+      predicted = data[[pair[2]]]
+    )
+  })
+}
+
+interaction_confusion <- create_pairwise_comparisons_single(
+  interaction_wide,
+  c("interaction_elenahc", "interaction_m1deng")
+) %>%
+  create_confusion_data() %>%
+  add_proportions_and_pmi(all_interactions, min_count = 0) %>%
+  order_by_max_pmi()
+
+plot_confusion_counts(
+  interaction_confusion,
+  "Anyone Interacting: Counts",
+  "m1deng", #x-axis: predicted
+  "elenahc" #y-axis: actual
+)
+
+plot_confusion_proportions(
+  interaction_confusion,
+  "Anyone Interacting: Proportions",
+  "m1deng", #x-axis: predicted
+  "elenahc" #y-axis: actual
+)
+
+interaction_matrix <- interaction_wide %>%
+  select(interaction_elenahc, interaction_m1deng) %>%
+  as.matrix()
+
+kappa_interaction <- kappa2(interaction_matrix)
+print(paste("Cohen's Kappa for anyoneInteracting:", round(kappa_interaction$value, 3)))
+```
+```{r}
+# 2. PRIMARY ACTIVITY Confusion Matrices
+print("=== PRIMARY ACTIVITY ===")
+
+primary_confusion <- create_pairwise_comparisons_single(
+  primary_activity_wide,
+  c("primary_elenahc", "primary_m1deng")
+) %>%
+  create_confusion_data() %>%
+  add_proportions_and_pmi(all_primary_activities, min_count=1) %>%
+  order_by_max_pmi()
+
+plot_confusion_counts(
+  primary_confusion,
+  "Primary Activity: Counts",
+  "m1deng", #x-axis: predicted
+  "elenahc" #y-axis: actual
+)
+
+plot_confusion_proportions(
+  primary_confusion,
+  "Primary Activity: Proportions",
+  "m1deng", #x-axis: predicted
+  "elenahc" #y-axis: actual
+)
+
+plot_confusion_pmi(
+  primary_confusion,
+  "Primary Activity: PMI",
+  "m1deng", #x-axis: predicted
+  "elenahc" #y-axis: actual
+)
+
+# Calculate agreement
+primary_matrix <- primary_activity_wide %>%
+  select(primary_elenahc, primary_m1deng) %>%
+  as.matrix()
+
+kappa_primary <- kappa2(primary_matrix)
+print(paste("Cohen's Kappa for primaryActivity:", round(kappa_primary$value, 3)))
+```
+# 3. EXPANDED ACTIVITIES (Primary + Other Activities)
+```{r}
+print("=== EXPANDED ACTIVITIES (Primary + Other) ===")
+
+
+# For confusion matrix with expanded activities, we need to check overlap
+# This creates binary agreement: do any activities overlap between annotators?
+expanded_wide <- main_annotations %>%
+  select(videoFilename, annotatorName, all_activities) %>%
+  pivot_wider(
+    names_from = annotatorName,
+    values_from = all_activities,
+    names_prefix = "activities_"
+  )
+
+# Calculate set-based agreement
+expanded_agreement <- expanded_wide %>%
+  rowwise() %>%
+  mutate(
+    overlap = length(intersect(activities_elenahc, activities_m1deng)) > 0,
+    elenahc_count = length(activities_elenahc),
+    m1deng_count = length(activities_m1deng)
+  ) %>%
+  ungroup()
+
+# For confusion matrix with expanded activities, treat primary as "actual"
+# and check if it appears in the other annotator's expanded list
+expanded_comparison <- expanded_annotations %>%
+  select(videoFilename, annotatorName, primaryActivity, all_activities) %>%
+  pivot_wider(
+    names_from = annotatorName,
+    values_from = c(primaryActivity, all_activities),
+    names_sep = "_"
+  )
+
+# Create bidirectional comparisons
+expanded_confusion_data <- bind_rows(
+  expanded_comparison %>%
+    rowwise() %>%
+    mutate(
+      actual = primaryActivity_elenahc,
+      predicted = if(primaryActivity_elenahc %in% all_activities_m1deng) 
+        primaryActivity_elenahc else "other"
+    ),
+  expanded_comparison %>%
+    rowwise() %>%
+    mutate(
+      actual = primaryActivity_m1deng,
+      predicted = if(primaryActivity_m1deng %in% all_activities_elenahc) 
+        primaryActivity_m1deng else "other"
+    )
+) %>%
+  ungroup()
+
+# Get all activities for confusion matrix
+all_activities_expanded <- c(unique(main_annotations$primaryActivity), "other")
+
+expanded_confusion <- expanded_confusion_data %>%
+  create_confusion_data() %>%
+  add_proportions_and_pmi(all_activities_expanded) %>%
+  order_by_max_pmi()
+
+plot_confusion_counts(
+  expanded_confusion,
+  "Expanded Activities: Counts (Primary vs All Activities)",
+  "Found in Other's List",
+  "Primary Activity"
+)
+
+plot_confusion_proportions(
+  expanded_confusion,
+  "Expanded Activities: Proportions (Primary vs All Activities)",
+  "Found in Other's List",
+  "Primary Activity"
+)
+
+plot_confusion_pmi(
+  expanded_confusion,
+  "Expanded Activities: PMI (Primary vs All Activities)",
+  "Found in Other's List",
+  "Primary Activity"
+)
+```
+
+```{r}
+# Calculate agreement for each video across all measures
+video_difficulty <- main_annotations %>%
+  # Add video order (sorted by videoFilename descending, then index+1)
+  arrange(desc(videoFilename)) %>%
+  mutate(video_order = row_number()) %>%
+  arrange(videoFilename) %>%
+  
+  # Group by video to calculate agreement metrics
+  group_by(videoFilename) %>%
+  summarise(
+    video_order = first(video_order),
+    
+    # Agreement on anyoneInteracting
+    interaction_agreement = ifelse(
+      n() == 2,
+      as.numeric(anyoneInteracting[1] == anyoneInteracting[2]),
+      NA_real_
+    ),
+    
+    # Agreement on primaryActivity
+    primary_agreement = ifelse(
+      n() == 2,
+      as.numeric(primaryActivity[1] == primaryActivity[2]),
+      NA_real_
+    ),
+    
+    # primary + others overlap
+    expanded_agreement = ifelse(
+      n() == 2,
+      {
+        activities_1 <- unlist(all_activities[1])
+        activities_2 <- unlist(all_activities[2])
+        round(as.numeric(length(intersect(activities_1, activities_2)) / max(length(activities_1), length(activities_2))),2)
+      },
+      NA_real_
+    ),
+    
+    n_annotators = n()
+  ) %>%
+  ungroup() %>%
+  
+  # Calculate composite difficulty score (higher = easier)
+  mutate(
+    # Sum of agreements (0-3, where 3 = perfect agreement on all)
+    composite_agreement = interaction_agreement + primary_agreement + expanded_agreement,
+    
+    # Difficulty rank (1 = hardest, higher = easier)
+    difficulty_rank = rank(composite_agreement, ties.method = "first")
+  ) %>%
+  
+  # Sort by difficulty (easiest to hardest)
+  arrange(desc(composite_agreement), videoFilename)
+
+# View summary
+print("=== VIDEO DIFFICULTY SUMMARY ===")
+print(paste("Total videos:", nrow(video_difficulty)))
+print(paste("Videos with perfect agreement (all 3):", sum(video_difficulty$composite_agreement == 3, na.rm = TRUE)))
+
+# Show distribution
+print("\nAgreement distribution:")
+video_difficulty %>%
+  group_by(composite_agreement) %>%
+  summarise(
+    count = n(),
+    percentage = round(n() / nrow(video_difficulty) * 100, 1)
+  ) %>%
+  print()
+
+# View easiest videos
+video_difficulty %>%
+  arrange(desc(composite_agreement)) %>%
+  select(videoFilename, video_order, interaction_agreement, 
+         primary_agreement, expanded_agreement, composite_agreement) %>%
+  head(10) %>%
+  print()
+
+# View hardest videos
+video_difficulty %>%
+  arrange(composite_agreement) |>
+  select(videoFilename, video_order, interaction_agreement, 
+         primary_agreement, expanded_agreement, composite_agreement) %>%
+  head(10) %>%
+  print()
+```
+
+```{r}
+# Visualize difficulty distribution
+library(ggplot2)
+
+ggplot(video_difficulty, aes(x = composite_agreement)) +
+  geom_bar(fill = "steelblue", color = "black") +
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5) +
+  labs(
+    title = "Video Difficulty Distribution",
+    subtitle = "Based on number of measures with annotator agreement",
+    x = "Number of Measures with Agreement",
+    y = "Number of Videos"
+  ) +
+  scale_x_continuous(breaks = seq(0,3,by=0.5))+
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5))
+```

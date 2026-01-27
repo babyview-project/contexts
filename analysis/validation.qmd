@@ -1,3 +1,8 @@
+---
+title: "Activity annotations validation"
+format: html
+toc: true
+---
 ```{r}
 library(tidyverse)
 library(here)
@@ -14,22 +19,70 @@ ann_3 <- read.csv(here("data/completed_annotations/VM_list_final.csv"))
 df_cleaned <- read.csv(here("data/all_contexts_cleaned.csv"))
 ```
 
+# helpers
+```{r}
+calculate_f_score <- function(predicted, actual) {
+  # Convert to character and trim strings
+  predicted <- str_trim(as.character(predicted))
+  actual <- str_trim(as.character(actual))
+  
+  # Remove NA values
+  valid_indices <- !is.na(predicted) & !is.na(actual)
+  predicted <- predicted[valid_indices]
+  actual <- actual[valid_indices]
+  
+  if(length(predicted) == 0 || length(actual) == 0) {
+    return(list(precision = NA, recall = NA, f1 = NA))
+  }
+  
+  # Get unique labels
+  all_labels <- unique(c(predicted, actual))
+  
+  # Calculate population-level metrics across all labels
+  total_tp <- 0
+  total_fp <- 0
+  total_fn <- 0
+  total_f1s <- c()
+  for(label in all_labels) {
+    tp <- sum(predicted == label & actual == label)
+    fp <- sum(predicted == label & actual != label)
+    fn <- sum(predicted != label & actual == label)
+    precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+    recall <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+    f1 <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
+    if ((tp+fp)>=5) {
+      total_f1s <- c(total_f1s, f1)
+    }
+    total_tp <- total_tp + tp
+    total_fp <- total_fp + fp
+    total_fn <- total_fn + fn
+  }
+  
+  # Population-level precision, recall, and F1
+  precision <- ifelse(total_tp + total_fp == 0, 0, total_tp / (total_tp + total_fp))
+  recall <- ifelse(total_tp + total_fn == 0, 0, total_tp / (total_tp + total_fn))
+  f1 <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
+  #print(paste0("F1 at category level", mean(total_f1s)))
+  return(list(precision = precision, recall = recall, f1 = f1))
+}
+```
+
 # main IRR and precision calculations across raters
 ```{r}
 # Step 1: Add annotator ID and combine all annotation files (including Other columns)
 ann_1_labeled <- ann_1 %>%
   mutate(annotator = "DD") %>%
-  select(video_id, Location, Activity, Other.locations, Other.activities, 
+  dplyr::select(video_id, Location, Activity, Other.locations, Other.activities, 
          Video.description.accuracy..1.5., annotator)
 
 ann_2_labeled <- ann_2 %>%
   mutate(annotator = "JY") %>%
-  select(video_id, Location, Activity, Other.locations, Other.activities, 
+  dplyr::select(video_id, Location, Activity, Other.locations, Other.activities, 
          Video.description.accuracy..1.5., annotator)
 
 ann_3_labeled <- ann_3 %>%
   mutate(annotator = "VM") %>%
-  select(video_id, Location, Activity, Other.locations, Other.activities, 
+  dplyr::select(video_id, Location, Activity, Other.locations, Other.activities, 
          Video.description.accuracy..1.5., annotator)
 
 # Combine all annotations
@@ -59,12 +112,16 @@ print(paste("Number of rows in df_cleaned matching complete annotations:", nrow(
 # Step 4: Prepare data for inter-rater reliability analysis
 # Pivot wider to have one row per video_id with columns for each annotator
 location_wide <- complete_ratings %>%
-  select(video_id, annotator, Location) %>%
+  dplyr::select(video_id, annotator, Location) %>%
   pivot_wider(names_from = annotator, values_from = Location, names_prefix = "Location_")
 
 activity_wide <- complete_ratings %>%
-  select(video_id, annotator, Activity) %>%
-  pivot_wider(names_from = annotator, values_from = Activity, names_prefix = "Activity_")
+  dplyr::select(video_id, annotator, Activity, Other.activities) %>%
+  pivot_wider(
+    names_from = annotator,
+    values_from = c(Activity, Other.activities),
+    names_sep = "_"
+  )
 
 # Video description accuracy ratings
 accuracy_wide <- complete_ratings %>%
@@ -72,7 +129,9 @@ accuracy_wide <- complete_ratings %>%
   mutate(Video.description.accuracy..1.5. = as.numeric(Video.description.accuracy..1.5.)) %>%
   pivot_wider(names_from = annotator, values_from = Video.description.accuracy..1.5., 
               names_prefix = "Accuracy_")
+```
 
+```{r}
 print("=== INTER-RATER RELIABILITY ANALYSIS ===")
 
 # For Location
@@ -110,6 +169,7 @@ if(all(c("Activity_DD", "Activity_JY", "Activity_VM") %in% colnames(activity_wid
   print(paste("Activity - Cohen's Kappa (DD vs VM):", round(activity_kappa_2$value, 3)))
   activity_kappa_3 <- kappa2(activity_matrix[,2:3])
   print(paste("Activity - Cohen's Kappa (VM vs JY):", round(activity_kappa_3$value, 3)))
+  print(paste("Mean Cohen's:", mean(activity_kappa$value, activity_kappa_2$value, activity_kappa_3$value)))
   print(paste("Activity - Fleiss Kappa:", round(fleiss_kappa$value, 3)))
   print(paste("Activity - Kripp Alpha:", round(kripp_alpha$value, 3)))
 }
@@ -230,8 +290,7 @@ expand_annotations <- function(primary_col, other_col) {
   return(expanded)
 }
 
-# Step 8: Calculate F-scores comparing annotations with df_cleaned
-print("\n=== F-SCORE ANALYSIS ===")
+print("\n=== Comparing VQA model to humans ===")
 
 # Function to calculate F-score for sets (allowing multiple correct answers)
 calculate_f_score_sets <- function(human_list, predicted) {
@@ -276,48 +335,7 @@ calculate_f_score_sets <- function(human_list, predicted) {
   return(list(precision = precision, recall = recall, f1 = f1))
 }
 
-# Corrected standard F-score function (population-level calculation)
 
-calculate_f_score <- function(predicted, actual) {
-  # Convert to character and trim strings
-  predicted <- str_trim(as.character(predicted))
-  actual <- str_trim(as.character(actual))
-  
-  # Remove NA values
-  valid_indices <- !is.na(predicted) & !is.na(actual)
-  predicted <- predicted[valid_indices]
-  actual <- actual[valid_indices]
-  
-  if(length(predicted) == 0 || length(actual) == 0) {
-    return(list(precision = NA, recall = NA, f1 = NA))
-  }
-  
-  # Get unique labels
-  all_labels <- unique(c(predicted, actual))
-  
-  # Calculate population-level metrics across all labels
-  total_tp <- 0
-  total_fp <- 0
-  total_fn <- 0
-  
-  for(label in all_labels) {
-    tp <- sum(predicted == label & actual == label)
-    fp <- sum(predicted == label & actual != label)
-    fn <- sum(predicted != label & actual == label)
-    
-    total_tp <- total_tp + tp
-    total_fp <- total_fp + fp
-    total_fn <- total_fn + fn
-  }
-  
-  # Population-level precision, recall, and F1
-  precision <- ifelse(total_tp + total_fp == 0, 0, total_tp / (total_tp + total_fp))
-  recall <- ifelse(total_tp + total_fn == 0, 0, total_tp / (total_tp + total_fn))
-  f1 <- ifelse(precision + recall == 0, 0, 2 * precision * recall / (precision + recall))
-  print(paste("Accuracy", total_tp / 80))
-  
-  return(list(precision = precision, recall = recall, f1 = f1))
-}
 
 # Merge annotations with df_cleaned for comparison
 comparison_data <- complete_ratings %>%
@@ -336,28 +354,383 @@ comparison_data_expanded <- comparison_data %>%
 # Calculate F-scores for each annotator vs df_cleaned
 annotators <- c("DD", "JY", "VM")
 
-print("--- PRIMARY ANNOTATIONS ONLY ---")
+location_precision = c()
+activity_precision = c()
 for(annotator in annotators) {
   annotator_data <- comparison_data %>% filter(annotator == !!annotator)
-  
-  print(paste("\n--- Annotator:", annotator, "---"))
+
   
   # Location F-score
   location_f_score <- calculate_f_score(annotator_data$Location_annotation, 
                                       annotator_data$Location_cleaned)
-  print(paste("Location F1-Score:", round(location_f_score$f1, 3)))
-  print(paste("Location Precision:", round(location_f_score$precision, 3)))
-  print(paste("Location Recall:", round(location_f_score$recall, 3)))
-  
+  location_precision = c(location_precision, location_f_score$precision)
+
   # Activity F-score
   activity_f_score <- calculate_f_score(annotator_data$Activity_annotation, 
                                        annotator_data$Activity_cleaned)
-  print(paste("Activity F1-Score:", round(activity_f_score$f1, 3)))
-  print(paste("Activity Precision:", round(activity_f_score$precision, 3)))
-  print(paste("Activity Recall:", round(activity_f_score$recall, 3)))
+  activity_precision = c(activity_precision, activity_f_score$precision)
 }
+print(paste0("Mean location precision:", round(mean(location_precision), 3)))
+print(paste0("Mean activity precision:", round(mean(activity_precision), 3)))
 ```
-# expanded contexts within rater
+
+# Splitting postural and non-postural activities
+Just checking how many detections we have per activity
+```{r}
+comparison_data |> filter(annotator=="DD") |> group_by(Activity_cleaned) |>
+  count(Activity_cleaned) |>
+  arrange(desc(n))
+```
+
+```{r}
+all_posture_activities <- c("being held", "walking", "standing", "sitting", "crawling" , "lying down")
+
+process_one_coder <- function(data, coder) {
+  data %>%
+    rowwise() %>%
+    mutate(
+      combined = list(c(.data[[paste0("Activity_", coder)]], 
+                       strsplit(.data[[paste0("Other.activities_", coder)]], ", ")[[1]])),
+      posture = first(combined[combined %in% all_posture_activities]),
+      main = first(combined[!(combined %in% c(all_posture_activities, "other")) & combined != ""]),
+      main_clubbed = case_when(
+        main == "exploring" ~ "playing",
+        main == "other" ~ NA_character_,
+        main == "watching tv" ~ "looking at device",
+        TRUE ~ main
+      )
+    ) %>%
+    ungroup() %>%
+    rename_with(~paste0(., "_", coder), c(combined, posture, main, main_clubbed))
+}
+
+activity_separate <- activity_wide %>%
+  process_one_coder("DD") %>%
+  process_one_coder("JY") %>%
+  process_one_coder("VM") %>%
+  select(video_id, ends_with("_DD"), ends_with("_JY"), ends_with("_VM"))
+
+# View the result
+calculate_irr <- function(matrix_data, label) {
+  cat("\n===", label, "===\n")
+  
+  # Cohen's Kappa for each pair
+  kappa_dd_jy <- kappa2(matrix_data[,1:2])
+  kappa_dd_vm <- kappa2(matrix_data[,c(1,3)])
+  kappa_jy_vm <- kappa2(matrix_data[,2:3])
+  
+  print(paste("Cohen's Kappa (DD vs JY):", round(kappa_dd_jy$value, 3)))
+  print(paste("Cohen's Kappa (DD vs VM):", round(kappa_dd_vm$value, 3)))
+  print(paste("Cohen's Kappa (JY vs VM):", round(kappa_jy_vm$value, 3)))
+  print(paste("Mean Cohen's Kappa:", round(mean(c(kappa_dd_jy$value, kappa_dd_vm$value, kappa_jy_vm$value)), 3)))
+  
+  # Fleiss' Kappa
+  fleiss <- kappam.fleiss(matrix_data)
+  print(paste("Fleiss' Kappa:", round(fleiss$value, 3)))
+  
+  # Krippendorff's Alpha
+  kripp <- kripp.alpha(t(matrix_data), method="nominal")
+  print(paste("Krippendorff's Alpha:", round(kripp$value, 3)))
+  
+  cat("\n")
+}
+
+# Posture
+posture_matrix <- activity_separate %>%
+  dplyr::select(posture_DD, posture_JY, posture_VM) %>%
+  as.matrix()
+calculate_irr(posture_matrix, "POSTURE")
+
+# Main activity
+main_matrix <- activity_separate %>%
+  dplyr::select(main_DD, main_JY, main_VM) %>%
+  as.matrix()
+calculate_irr(main_matrix, "MAIN ACTIVITY")
+
+# Main activity (clubbed)
+main_clubbed_matrix <- activity_separate %>%
+  select(main_clubbed_DD, main_clubbed_JY, main_clubbed_VM) %>%
+  as.matrix()
+calculate_irr(main_clubbed_matrix, "MAIN ACTIVITY (CLUBBED)")
+
+# Merge activity_separate with ground truth
+comparison_activities <- activity_separate %>%
+  mutate(cleaned_video_id = sub("^\\d+_", "", video_id)) %>%
+  left_join(df_cleaned %>% select(video_id, Activity), 
+            by = c("cleaned_video_id" = "video_id"))
+
+
+comparison_activities <- comparison_activities %>%
+  mutate(
+    vqa_posture = ifelse(Activity %in% all_posture_activities, Activity, NA),
+    vqa_main = ifelse(!(Activity %in% all_posture_activities), Activity, NA)
+  )
+
+# Calculate F-scores
+annotators <- c("DD", "JY", "VM")
+
+mean_precision = c()
+for(annotator in annotators) {
+  data_posture <- comparison_activities %>%
+    filter(!is.na(vqa_posture))
+  
+  predicted <- data_posture[[paste0("posture_", annotator)]]
+  actual <- data_posture$vqa_posture
+  
+  f_score <- calculate_f_score(predicted, actual)
+  
+  # cat("\n--- Annotator:", annotator, "---\n")
+  #print(paste("Posture Precision:", round(f_score$precision, 3)))
+   mean_precision = c(mean_precision, f_score$precision)
+}
+print(paste("Mean posture activity precision:", round(mean(mean_precision), 3)))
+
+mean_precision = c()
+for(annotator in annotators) {
+  data_main <- comparison_activities %>%
+    filter(!is.na(vqa_main))
+  
+  predicted <- data_main[[paste0("main_", annotator)]]
+  actual <- data_main$vqa_main
+  
+  f_score <- calculate_f_score(predicted, actual)
+  
+  #cat("\n--- Annotator:", annotator, "---\n")
+ #print(paste("Main Activity Precision:", round(f_score$precision, 3)))
+  mean_precision = c(mean_precision, f_score$precision)
+}
+ print(paste("Mean main Activity Precision:", round(mean(mean_precision), 3)))
+
+ mean_precision = c()
+for(annotator in annotators) {
+ data_main <- comparison_activities %>%
+  filter(!is.na(vqa_main)) %>%
+  mutate(
+    vqa_main = case_when(
+      vqa_main == "exploring"    ~ "playing",
+      vqa_main == "other"        ~ NA_character_,
+      vqa_main == "watching tv"  ~ "looking at device",
+      TRUE                                ~ vqa_main
+    )
+  )
+  
+  predicted <- data_main[[paste0("main_clubbed_", annotator)]]
+  actual <- data_main$vqa_main
+  
+  f_score <- calculate_f_score(predicted, actual)
+  
+  #cat("\n--- Annotator:", annotator, "---\n")
+  #print(paste("Main Clubbed Precision:", round(f_score$precision, 3)))
+   mean_precision = c(mean_precision, f_score$precision)
+}
+ print(paste("Mean main clubbed activity Precision:", round(mean(mean_precision), 3)))
+```
+
+## Confusion matrices
+```{r}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Helper function to create all pairwise comparisons
+create_pairwise_comparisons <- function(data, columns) {
+  expand.grid(col1 = columns, col2 = columns, stringsAsFactors = FALSE) %>%
+    filter(col1 != col2) %>%
+    rowwise() %>%
+    do({
+      data.frame(
+        actual = data[[.$col1]],
+        predicted = data[[.$col2]]
+      )
+    }) %>%
+    bind_rows()
+}
+
+# Function to create confusion matrix with counts
+create_confusion_data <- function(data) {
+  data %>%
+    filter(!is.na(predicted) & !is.na(actual)) %>%
+    group_by(actual, predicted) %>%
+    summarise(count = n(), .groups = "drop")
+}
+
+# Function to add proportions and PMI with Laplace smoothing
+# min count = min number of exemplars sampled to include in plot
+add_proportions_and_pmi <- function(confusion_data, all_activities, laplace = 1, min_count = 3) {
+  # Ensure all activities are present in both dimensions
+  confusion_complete <- confusion_data %>%
+    complete(
+      actual = all_activities, 
+      predicted = all_activities, 
+      fill = list(count = 0)
+    ) %>%
+    mutate(count_smoothed = count + laplace)
+  
+  # Calculate proportions and PMI
+  total <- sum(confusion_complete$count_smoothed)
+  
+ result <- confusion_complete %>%
+  group_by(actual) %>%
+  mutate(
+    row_total = sum(count_smoothed),
+    prop = count_smoothed / row_total,
+    keep_row = sum(count) >= min_count
+  ) %>%
+  ungroup() %>%
+  filter(!predicted %in% actual[!keep_row]) %>%
+  group_by(predicted) %>%
+  mutate(col_total = sum(count_smoothed)) %>%
+  ungroup() %>%
+  mutate(
+    p_actual = row_total / total,
+    p_predicted = col_total / total,
+    p_joint = count_smoothed / total,
+    pmi = log2(p_joint / (p_actual * p_predicted))
+  ) %>%
+  filter(keep_row) %>%
+  select(actual, predicted, count, prop, pmi)
+ return(result)
+}
+
+# Function to order by max PMI
+order_by_max_pmi <- function(confusion_data) {
+  # Get ordering for actual (rows)
+  row_order <- confusion_data %>%
+    group_by(actual) %>%
+    summarise(max_pmi = max(pmi, na.rm = TRUE)) %>%
+    arrange(desc(max_pmi)) %>%
+    pull(actual)
+  
+  # Get ordering for predicted (columns)
+  col_order <- confusion_data %>%
+    group_by(predicted) %>%
+    summarise(max_pmi = max(pmi, na.rm = TRUE)) %>%
+    arrange(desc(max_pmi)) %>%
+    pull(predicted)
+  
+  confusion_data %>%
+    mutate(
+      actual = factor(actual, levels = row_order),
+      predicted = factor(predicted, levels = col_order)
+    )
+}
+
+# Plotting functions
+plot_confusion_counts <- function(confusion_data, title, x_lab, y_lab) {
+  ggplot(confusion_data, aes(x = predicted, y = actual, fill = count)) +
+    geom_tile(color = "gray80", linewidth = 0.2) +
+    geom_text(aes(label = count), color = "black", size = 3) +
+    scale_fill_gradient(low = "white", high = "steelblue") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14)
+    ) +
+    labs(title = title, x = x_lab, y = y_lab, fill = "Count") +
+    coord_fixed()
+}
+
+plot_confusion_proportions <- function(confusion_data, title, x_lab, y_lab) {
+  ggplot(confusion_data, aes(x = predicted, y = actual, fill = prop)) +
+    geom_tile(color = "gray80", linewidth = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", prop)), color = "black", size = 3) +
+    scale_fill_gradient(low = "white", high = "steelblue") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14)
+    ) +
+    labs(title = title, x = x_lab, y = y_lab, fill = "Proportion") +
+    coord_fixed()
+}
+
+plot_confusion_pmi <- function(confusion_data, title, x_lab, y_lab) {
+  ggplot(confusion_data, aes(x = predicted, y = actual, fill = pmi)) +
+    geom_tile(color = "gray80", linewidth = 0.2) +
+    scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14)
+    ) +
+    labs(title = title, x = x_lab, y = y_lab, fill = "PMI") +
+    coord_fixed()
+}
+
+# Define all activities for each category
+all_main_activities <- comparison_data |> 
+  filter(!(Activity_cleaned %in% all_posture_activities)) |> 
+  pull(Activity_cleaned) |> 
+  unique()
+
+
+# POSTURE: Human-Human
+posture_human_human <- create_pairwise_comparisons(
+  activity_separate, 
+  c("posture_DD", "posture_JY", "posture_VM")
+) %>%
+  create_confusion_data() %>%
+  add_proportions_and_pmi(all_posture_activities) %>%
+  order_by_max_pmi()
+
+plot_confusion_counts(posture_human_human, "Confusion counts: inter-rater postural activities", "All raters", "All other raters")
+plot_confusion_proportions(posture_human_human, "Proportions: inter-rater postural activities", "All raters", "All other raters")
+plot_confusion_pmi(posture_human_human, "PMI: inter-rater postural activities", "All raters", "All other raters")
+
+# MAIN ACTIVITY: Human-Human
+main_human_human <- create_pairwise_comparisons(
+  activity_separate, 
+  c("main_DD", "main_JY", "main_VM")
+) %>%
+  create_confusion_data() %>%
+  add_proportions_and_pmi(all_main_activities) %>%
+  order_by_max_pmi()
+
+plot_confusion_counts(main_human_human, "Confusion counts: inter-rater non-postural activities", "All raters", "All other raters")
+plot_confusion_proportions(main_human_human, "Proportions: inter-rater non-postural activities", "All raters", "All other raters")
+plot_confusion_pmi(main_human_human, "PMI: inter-rater non-postural activities", "All raters", "All other raters")
+
+# ============================================
+# HUMAN-VQA COMPARISONS
+# ============================================
+
+# POSTURE: Human-VQA
+posture_human_vqa <- bind_rows(
+  comparison_activities %>% filter(!is.na(vqa_posture)) %>%
+    select(actual = posture_DD, predicted = vqa_posture),
+  comparison_activities %>% filter(!is.na(vqa_posture)) %>%
+    select(actual = posture_JY, predicted = vqa_posture),
+  comparison_activities %>% filter(!is.na(vqa_posture)) %>%
+    select(actual = posture_VM, predicted = vqa_posture)
+) %>%
+  create_confusion_data() %>%
+  add_proportions_and_pmi(all_posture_activities) %>%
+  order_by_max_pmi()
+
+plot_confusion_counts(posture_human_vqa, "Postural Human-VQA: Counts", "VQA", "Human")
+plot_confusion_proportions(posture_human_vqa, "Postural Human-VQA: Proportions", "VQA", "Human")
+plot_confusion_pmi(posture_human_vqa, "Postural Human-VQA: PMI", "VQA", "Human")
+
+# MAIN ACTIVITY: Human-VQA
+main_human_vqa <- bind_rows(
+  comparison_activities %>% filter(!is.na(vqa_main)) %>%
+    select(actual = main_DD, predicted = vqa_main),
+  comparison_activities %>% filter(!is.na(vqa_main)) %>%
+    select(actual = main_JY, predicted = vqa_main),
+  comparison_activities %>% filter(!is.na(vqa_main)) %>%
+    select(actual = main_VM, predicted = vqa_main)
+) %>%
+  create_confusion_data() %>%
+  add_proportions_and_pmi(all_main_activities) %>%
+  order_by_max_pmi()
+
+plot_confusion_counts(main_human_vqa, "Non-postural activity Human-VQA: Counts", "VQA", "Human")
+plot_confusion_proportions(main_human_vqa, "Non-postural activity Human-VQA: Proportions", "VQA", "Human")
+plot_confusion_pmi(main_human_vqa, "Non-postural activity Human-VQA: PMI", "VQA", "Human")
+```
+
+
+# expanded contexts within rater (all activities together)
 ```{r}
 activities_expanded <- comparison_data_expanded |> 
   rename(Location_model = Location_cleaned,
@@ -382,7 +755,7 @@ paste("Mean locatin precision (when including other location):", round(mean(loca
 saveRDS(comparison_data_expanded, here("data/completed_annotations/comparison_annotation_data.Rds"))
 ```
 
-# expanded contexts across raters
+# expanded contexts across raters (all activities together)
 ```{r}
 comparison_data_expanded |>
   mutate(Location_model = str_trim(Location_cleaned),
@@ -394,8 +767,8 @@ comparison_data_expanded |>
   summarize(activity_correct = any(correct_activity_annotation),
             location_correct = any(correct_location_annotation)) |>
   ungroup() |>
-  summarize(loc_acc = sum(location_correct==TRUE)/100,
-            act_acc = sum(activity_correct==TRUE)/100)
+  summarize(loc_acc = sum(location_correct==TRUE)/n(),
+            act_acc = sum(activity_correct==TRUE)/n())
 
 print("Mean number of activities")
 mean(sapply(comparison_data_expanded$expanded_activities, length))
@@ -403,8 +776,8 @@ sd(sapply(comparison_data_expanded$expanded_activities, length))
 print("Mean number of locations")
 mean(sapply(comparison_data_expanded$expanded_locations, length))
 sd(sapply(comparison_data_expanded$expanded_locations, length))
-
 ```
+
 # descriptions
 ```{r}
 paste("Mean video description accuracy:", round(mean(comparison_data_expanded$Video.description.accuracy..1.5.), 2),
