@@ -1,0 +1,40 @@
+video_filename,primary_activity,primary_activity_confidence,other_activities,other_activities_confidence,anyone_interacting,type,pa_reasoning,pa_conf_reasoning,oa_reasoning,oa_conf_reasoning,ao_reasoning
+00680001_2023-04-15_2_af70a91b3b_processed_012.mp4,looking around,3,"moving around,conversing",2,yes,example,The child in this clip is primarily looking around with curiosity as they're being moved by their caregiver,It is very clear which activity is ongoing with good lighting,"While the child is moving around in this clip, it is not the primary activity as it is initiated by a caregiver. The child also appears to be talking to their caregiver towards the end of the clip so we additionally mark conversing as an activity the child is doing with slightly less confidence",
+00510002_2024-10-22_1_c66b060162_processed_050.mp4,reading time,3,none,3,yes,example,a social partner is reading the book to the child as can be inferred from the angle of the camera and the finger on the right,
+00720001_2023-08-16_2_65439db90c_processed_042.mp4,reading time,3,looking around,3,yes,gold
+00420001_2024-05-12_2_4e4b1fb31f_processed_025.mp4,playing,3,none,3,yes,example
+00510001_2024-04-21_2_b4f0657787_processed_020.mp4,gardening,3,conversing,3,yes,example
+00240001_2024-07-12_1_aafb906c19_processed_000.mp4,meal time,3,none,3,yes,example
+00230001_2024-03-04_2_e1d5e7332b_processed_067.mp4,reading time,3,none,3,yes,gold
+00820001_2024-04-21_2_ac429ad42f_processed_067.mp4,cleaning,3,none,3,yes,gold
+00320002_2024-12-01_2_0732e91bb3_processed_038.mp4,screen time,3,none,3,no,gold
+00350002_2024-12-12_2_ff89daa357_processed_041.mp4,looking around,3,none,3,no,gold
+00820001_2023-04-30_3_c5472d6fe3_processed_062.mp4,moving around,3,none,3,no,example
+00320001_2024-03-23_3_cdf4f61fb7_processed_044.mp4,playing,3,none,3,no,gold
+00490001_2014-02-10_4_770d50627d_processed_064.mp4,looking around,3,none,3,no,gold
+00510001_2024-08-31_1_ee37f0f210_processed_047.mp4,meal time,3,none,3,yes,gold
+00400003_2024-05-30_1_827d4c14c9_processed_011.mp4,looking around,3,none,3,no,gold
+00510001_2024-12-05_2_c7f135e37d_processed_034.mp4,drawing,2,looking around,2,no,confusing
+00400001_2023-07-08_2_c7c5df87e0_processed_069.mp4,looking around,3,none,3,no,gold
+00400003_2024-10-13_4_1bfced7634_processed_064.mp4,conversing,3,none,3,yes,example
+00320002_2024-06-03_1_e20fa612a1_processed_043.mp4,moving around,3,looking around,3,yes,gold
+00820001_2023-10-22_1_6b65f4e23c_processed_076.mp4,screen time,2,"playing,looking around",2,yes,example
+00320001_2024-09-15_1_abbaf85eb5_processed_028.mp4,playing,3,looking around,3,no,gold
+00320001_2024-03-30_2_4b0d73de83_processed_011.mp4,playing,3,none,3,no,gold
+00420001_2024-06-21_1_1fc3e7b968_processed_056.mp4,looking around,3,none,3,no,gold
+00400001_2023-08-08_1-2_86950384ad_processed_015.mp4,reading time,3,none,3,yes,gold
+00320003_2024-02-22_1_e33a1c5c24_processed_040.mp4,looking around,3,none,3,yes,gold
+00510001_2024-06-02_1_c17282fc3b_processed_035.mp4,drinking,3,none,3,yes,example
+00400002_2024-06-09_2_9fcfaee432_processed_084.mp4,looking around,3,moving around,3,no,gold
+00370002_2024-11-02_3_804aeb99ea_processed_011.mp4,playing,3,none,3,yes,gold
+00400002_2024-05-05_2_9b3de46727_processed_040.mp4,getting dressed,3,none,3,no,gold
+00220001_2024-07-22_2_b2cd1e94c4_processed_023.mp4,playing,3,none,3,yes,gold
+00320001_2024-06-16_1_6de67b3f67_processed_043.mp4,playing,3,none,3,no,gold
+00590001_2024-09-13_1_061a76a7d4_processed_030.mp4,moving around,3,"playing,looking around",3,yes,gold
+00240001_2024-12-06_2_170cb8aefb_processed_081.mp4,looking around,3,none,3,yes,gold
+00370002_2024-09-11_1_05378465dd_processed_001.mp4,other,3,moving around,3,no,gold
+00820001_2023-06-26_2_7a58c5cb18_processed_032.mp4,playing,3,none,3,yes,gold
+00320003_2024-11-17_3_57effbf613_processed_006.mp4,conversing,3,looking around,3,yes,gold
+00320003_2024-11-09_3_d65a1c42c7_processed_062.mp4,playing,3,looking around,3,no,gold
+00590001_2024-09-27_1_b17e4f8769_processed_057.mp4,music time,3,none,3,no,example
+00500001_2024-06-29_1_27bb44f666_processed_010.mp4,drawing,3,none,3,no,example

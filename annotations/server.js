@@ -47,7 +47,7 @@ app.use(session({
     mongoUrl: process.env.MONGODB_URI || 'mongodb://localhost:27017/activity_annotations'
   }),
   cookie: {
-    maxAge: 1000 * 60 * 60 * 24 * 7 // 1 week
+    maxAge: 1000 * 60 * 60 // 1 hour
   }
 }));
 
@@ -81,10 +81,13 @@ const AnnotationSchema = new mongoose.Schema({
   otherActivities: [String],
   otherActivitiesConfidence: { type: String, required: true },
   anyoneInteracting: { type: String, required: true },
+  isTraining: { type: Boolean, default: false },  
+  attemptNumber: { type: Number },      
+  taskType: { type: String, enum: ['do', 'observe'], default: 'do' },          
   updatedAt: { type: Date, default: Date.now }
 });
 
-AnnotationSchema.index({ annotatorName: 1, videoFilename: 1 });
+AnnotationSchema.index({ annotatorName: 1, videoFilename: 1, isTraining: 1, attemptNumber: 1 });
 
 // ============================================================================
 // SCHEMAS - Clip Alignment Annotations with Prolific
@@ -125,31 +128,14 @@ const Annotation = mongoose.model('Annotation', AnnotationSchema);
 const ProlificUser = mongoose.model('ProlificUser', ProlificUserSchema);
 const ClipAlignment = mongoose.model('ClipAlignment', ClipAlignmentSchema);
 
-const useBasicAuth = process.env.USE_BASIC_AUTH === 'true';
+// Gold standard data loaded from CSV
+let goldStandardDataDoing = [];
+let goldStandardDataSeeing = [];
+let exampleVideoDataDoing = null;
+let exampleVideoDataSeeing = null;
 
-// Basic Auth Middleware
-const basicAuth = (req, res, next) => {
-  if (!useBasicAuth) {
-    return next();
-  }
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader) {
-    res.setHeader('WWW-Authenticate', 'Basic realm="Activity Annotations"');
-    return res.status(401).json({ error: 'Authentication required' });
-  }
+let useAuth = process.env.USE_BASIC_AUTH === 'true';
 
-  const auth = Buffer.from(authHeader.split(' ')[1], 'base64').toString().split(':');
-  const username = auth[0];
-  const password = auth[1];
-
-  if (username === process.env.APP_USERNAME && password === process.env.APP_PASSWORD) {
-    next();
-  } else {
-    res.setHeader('WWW-Authenticate', 'Basic realm="Activity Annotations"');
-    return res.status(401).json({ error: 'Invalid credentials' });
-  }
-};
 
 // Create directories
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -169,16 +155,191 @@ const csvUpload = multer({ dest: uploadsDir });
 app.use('/experiment', express.static('public'));
 
 // ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+function loadCSV(csvPath, fieldMap) {
+  const dataArray = [];
+
+  return new Promise((resolve, reject) => {
+    fs.createReadStream(csvPath)
+      .pipe(csv())
+      .on('data', (row) => {
+        const item = {};
+        for (const [key, csvCol] of Object.entries(fieldMap)) {
+          let value = row[csvCol];
+          // automatically parse integers if key includes "Index" or "index"
+          if (/index/i.test(key)) value = parseInt(value);
+          item[key] = value;
+        }
+        dataArray.push(item);
+      })
+      .on('end', () => {
+        console.log(`✓ Loaded ${dataArray.length} items from ${csvPath}`);
+        resolve(dataArray);
+      })
+      .on('error', reject);
+  });
+}
+
+// Load gold standards from CSV
+async function loadGoldStandards() {
+  const goldStandardsDoingPath = path.join(__dirname, 'gold_standards_doing.csv');
+  const goldStandardsSeeingPath = path.join(__dirname, 'gold_standards_seeing.csv');
+  
+  console.log('Attempting to load gold standards...');
+  
+  // Load DOING gold standards
+  if (fs.existsSync(goldStandardsDoingPath)) {
+    try {
+      const dataDoing = await loadCSV(goldStandardsDoingPath, {
+        videoFilename: 'video_filename',
+        primaryActivity: 'primary_activity',
+        primaryActivityConfidence: 'primary_activity_confidence',
+        otherActivities: 'other_activities',
+        otherActivitiesConfidence: 'other_activities_confidence',
+        anyoneInteracting: 'anyone_interacting',
+        type: 'type',
+        primaryActivityReasoning: 'pa_reasoning',
+        otherActivitiesReasoning: 'oa_reasoning',
+        interactingReasoning: 'ao_reasoning'
+      });
+
+      // Parse other_activities from semicolon-separated string to array
+      dataDoing.forEach(item => {
+        if (item.otherActivities) {
+          item.otherActivities = item.otherActivities.split(';').map(s => s.trim()).filter(Boolean);
+        } else {
+          item.otherActivities = [];
+        }
+      });
+
+      goldStandardDataDoing = dataDoing;
+      exampleVideoDataDoing = dataDoing.filter(item => item.type === 'example');
+      
+      const exampleCountDoing = dataDoing.filter(item => item.type === 'example').length;
+      const goldCountDoing = dataDoing.filter(item => item.type === 'gold').length;
+      
+      console.log(`✓ Loaded ${goldCountDoing} gold standard DOING videos`);
+      console.log(`✓ Loaded ${exampleCountDoing} example DOING videos`);
+    } catch (error) {
+      console.error('✗ Error loading DOING gold standards CSV:', error);
+    }
+  } else {
+    console.warn('⚠ Gold standards DOING CSV file not found at:', goldStandardsDoingPath);
+  }
+  
+  // Load SEEING gold standards
+  if (fs.existsSync(goldStandardsSeeingPath)) {
+    try {
+      const dataSeeing = await loadCSV(goldStandardsSeeingPath, {
+        videoFilename: 'video_filename',
+        primaryActivity: 'primary_activity',
+        primaryActivityConfidence: 'primary_activity_confidence',
+        otherActivities: 'other_activities',
+        otherActivitiesConfidence: 'other_activities_confidence',
+        anyoneInteracting: 'anyone_interacting',
+        type: 'type',
+        primaryActivityReasoning: 'pa_reasoning',
+        otherActivitiesReasoning: 'oa_reasoning',
+        interactingReasoning: 'ao_reasoning'
+      });
+
+      // Parse other_activities
+      dataSeeing.forEach(item => {
+        if (item.otherActivities) {
+          item.otherActivities = item.otherActivities.split(';').map(s => s.trim()).filter(Boolean);
+        } else {
+          item.otherActivities = [];
+        }
+      });
+
+      goldStandardDataSeeing = dataSeeing;
+      exampleVideoDataSeeing = dataSeeing.filter(item => item.type === 'example');
+      
+      const exampleCountSeeing = dataSeeing.filter(item => item.type === 'example').length;
+      const goldCountSeeing = dataSeeing.filter(item => item.type === 'gold').length;
+      
+      console.log(`✓ Loaded ${goldCountSeeing} gold standard SEEING videos`);
+      console.log(`✓ Loaded ${exampleCountSeeing} example SEEING videos`);
+    } catch (error) {
+      console.error('✗ Error loading SEEING gold standards CSV:', error);
+    }
+  } else {
+    console.warn('⚠ Gold standards SEEING CSV file not found at:', goldStandardsSeeingPath);
+  }
+  
+  if (goldStandardDataDoing.length === 0 && goldStandardDataSeeing.length === 0) {
+    console.warn('⚠ No gold standards loaded. Training phase will not work.');
+  }
+}
+
+// AUTH
+const requireAuth = (req, res, next) => {
+  console.log('Session ID:', req.sessionID);
+  console.log('Authenticated:', req.session.authenticated);
+  console.log('Cookie:', req.headers.cookie);
+  console.log("Use Auth:", useAuth);
+  if (!useAuth) {
+    return next();
+  }
+  
+  if (req.session.authenticated) {
+    return next();
+  }
+  
+  return res.status(401).json({ error: 'Authentication required' });
+};
+// Login endpoint
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    if (username === process.env.APP_USERNAME && password === process.env.APP_PASSWORD) {
+      req.session.authenticated = true;
+      req.session.username = username;
+      
+      res.json({ 
+        success: true,
+        message: 'Authentication successful'
+      });
+    } else {
+      res.status(401).json({ error: 'Invalid credentials' });
+    }
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy();
+  res.json({ success: true });
+});
+
+// ============================================================================
 // ROUTES - General
 // ============================================================================
 
+
 // Health check
-app.get('/api/health', basicAuth, (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date(), mongodb: mongoose.connection.readyState === 1 });
+app.get('/api/health', requireAuth, (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date(), 
+    mongodb: mongoose.connection.readyState === 1,
+    goldStandardsLoaded: {
+      doingExamples: (exampleVideoDataDoing || []).length,
+      doingGold: (goldStandardDataDoing || []).filter(v => v.type === 'gold').length,
+      seeingExamples: (exampleVideoDataSeeing || []).length,
+      seeingGold: (goldStandardDataSeeing || []).filter(v => v.type === 'gold').length
+    }
+  });
 });
 
 // Login/Create User
-app.post('/api/login', basicAuth, async (req, res) => {
+app.post('/api/login', requireAuth, async (req, res) => {
   try {
     const { name } = req.body;
     
@@ -205,8 +366,247 @@ app.post('/api/login', basicAuth, async (req, res) => {
   }
 });
 
+const sampledVideosDir = path.join(__dirname, 'sampled_context_videos');
+
+// ============================================================================
+// ROUTES - Training Videos
+// ============================================================================
+
+const exampleVideosDir = path.join(__dirname, 'example_videos');
+const goldStandardVideosDir = path.join(__dirname, 'goldstandard_videos');
+
+// Create training video directories if they don't exist
+[exampleVideosDir, goldStandardVideosDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir);
+    console.log(`Created directory: ${dir}`);
+  }
+});
+
+// Serve training video files
+app.use('/training-videos', express.static(exampleVideosDir));
+app.use('/training-videos', express.static(goldStandardVideosDir));
+
+// Get example video (the one video shown with annotations)
+app.get('/api/training/example-video', requireAuth, async (req, res) => {
+  try {
+    const taskType = req.query.taskType || 'do';
+    const exampleVideos = taskType === 'see' 
+      ? (goldStandardDataSeeing || []).filter(item => item.type === 'example')
+      : (goldStandardDataDoing || []).filter(item => item.type === 'example');
+    
+    if (exampleVideos.length === 0) {
+      return res.status(404).json({ 
+        error: `No example videos found for task type '${taskType}'. Please check gold_standards_${taskType === 'see' ? 'seeing' : 'doing'}.csv has rows with type=example` 
+      });
+    }
+    
+    // Verify video files exist
+    const validVideos = [];
+    for (const vid of exampleVideos) {
+      const videoPath1 = path.join(exampleVideosDir, vid.videoFilename);
+      const videoPath2 = path.join(goldStandardVideosDir, vid.videoFilename);
+      
+      if (fs.existsSync(videoPath1) || fs.existsSync(videoPath2)) {
+        validVideos.push({
+          videoFilename: vid.videoFilename,
+          description: vid.description || '',
+          primaryActivity: vid.primaryActivity,
+          primaryActivityConfidence: vid.primaryActivityConfidence,
+          otherActivities: vid.otherActivities || [],
+          otherActivitiesConfidence: vid.otherActivitiesConfidence,
+          anyoneInteracting: vid.anyoneInteracting,
+          primaryActivityReasoning: vid.primaryActivityReasoning,
+          otherActivitiesReasoning: vid.otherActivitiesReasoning,
+          interactingReasoning: vid.interactingReasoning
+        });
+      } else {
+        console.warn(`⚠ Example video file not found: ${vid.videoFilename}`);
+      }
+    }
+    
+    if (validVideos.length === 0) {
+      return res.status(404).json({ 
+        error: `Example video files not found for task type '${taskType}'`,
+        expectedVideos: exampleVideos.map(v => v.videoFilename)
+      });
+    }
+    
+    console.log(`Returning ${validVideos.length} example videos for task type '${taskType}'`);
+    
+    res.json({
+      success: true,
+      videos: validVideos,
+      count: validVideos.length
+    });
+  } catch (error) {
+    console.error('Example video error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get gold standard videos (for testing)
+app.get('/api/training/gold-standard-videos', requireAuth, async (req, res) => {
+  try {
+    const taskType = req.query.taskType || 'do';
+    const goldVideos = taskType === 'see'
+      ? (goldStandardDataSeeing || []).filter(item => item.type === 'gold')
+      : (goldStandardDataDoing || []).filter(item => item.type === 'gold');
+    
+    if (goldVideos.length === 0) {
+      return res.status(404).json({ 
+        error: `No gold standard videos found for task type '${taskType}'. Please check gold_standards_${taskType === 'see' ? 'seeing' : 'doing'}.csv has rows with type=gold` 
+      });
+    }
+    
+    // Verify video files exist
+    const videos = [];
+    for (const gs of goldVideos) {
+      const videoPath1 = path.join(exampleVideosDir, gs.videoFilename);
+      const videoPath2 = path.join(goldStandardVideosDir, gs.videoFilename);
+      
+      if (fs.existsSync(videoPath1) || fs.existsSync(videoPath2)) {
+        videos.push({
+          videoFilename: gs.videoFilename,
+          description: gs.description || '',
+          primaryActivity: gs.primaryActivity,
+          primaryActivityConfidence: gs.primaryActivityConfidence,
+          otherActivities: gs.otherActivities || [],
+          otherActivitiesConfidence: gs.otherActivitiesConfidence,
+          anyoneInteracting: gs.anyoneInteracting,
+          type: gs.type
+        });
+      } else {
+        console.warn(`⚠ Gold standard video file not found: ${gs.videoFilename}`);
+      }
+    }
+    
+    if (videos.length === 0) {
+      return res.status(404).json({ 
+        error: `No gold standard video files found for task type '${taskType}'`,
+        expectedVideos: goldVideos.map(gs => gs.videoFilename)
+      });
+    }
+    
+    console.log(`Returning ${videos.length} gold standard videos for task type '${taskType}'`);
+    
+    res.json({
+      success: true,
+      videos: videos,
+      count: videos.length
+    });
+  } catch (error) {
+    console.error('Gold standard videos error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reload gold standards from CSV
+app.post('/api/training/reload-gold-standards', requireAuth, async (req, res) => {
+  try {
+    await loadGoldStandards();
+    
+    res.json({
+      success: true,
+      exampleCount: exampleVideoData ? 1 : 0,
+      goldCount: goldStandardData.length,
+      message: 'Gold standards reloaded from CSV'
+    });
+  } catch (error) {
+    console.error('Reload gold standards error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Export current gold standards (in case you want to see what's loaded)
+app.get('/api/training/export-gold-standards', requireAuth, async (req, res) => {
+  try {
+    const allData = [];
+    
+    if (exampleVideoData) {
+      allData.push({ ...exampleVideoData, type: 'example' });
+    }
+    
+    goldStandardData.forEach(gs => {
+      allData.push({ ...gs, type: 'gold' });
+    });
+    
+    if (allData.length === 0) {
+      return res.status(400).json({ error: 'No gold standards loaded' });
+    }
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `gold_standards_export_${timestamp}.csv`;
+    const filepath = path.join(exportsDir, filename);
+    
+    // Flatten arrays to semicolon-separated strings
+    const flattenedData = allData.map(gs => ({
+      video_filename: gs.videoFilename,
+      primary_activity: gs.primaryActivity,
+      primary_activity_confidence: gs.primaryActivityConfidence,
+      other_activities: (gs.otherActivities || []).join('; '),
+      other_activities_confidence: gs.otherActivitiesConfidence,
+      anyone_interacting: gs.anyoneInteracting,
+      type: gs.type
+    }));
+    
+    const csvWriter = createObjectCsvWriter({
+      path: filepath,
+      header: [
+        { id: 'video_filename', title: 'video_filename' },
+        { id: 'primary_activity', title: 'primary_activity' },
+        { id: 'primary_activity_confidence', title: 'primary_activity_confidence' },
+        { id: 'other_activities', title: 'other_activities' },
+        { id: 'other_activities_confidence', title: 'other_activities_confidence' },
+        { id: 'anyone_interacting', title: 'anyone_interacting' },
+        { id: 'type', title: 'type' }
+      ]
+    });
+    
+    await csvWriter.writeRecords(flattenedData);
+    
+    res.download(filepath, filename, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+      }
+      // Clean up file after download
+      fs.unlinkSync(filepath);
+    });
+  } catch (error) {
+    console.error('Export gold standards error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Serve video files
+app.use('/videos', express.static(sampledVideosDir));
+
+// Get list of videos
+app.get('/api/video-list', requireAuth, (req, res) => {
+  try {
+    if (!fs.existsSync(sampledVideosDir)) {
+      return res.status(404).json({ error: 'Video directory not found' });
+    }
+    
+    const files = fs.readdirSync(sampledVideosDir);
+    const videoExtensions = ['.mp4', '.webm', '.ogg', '.mov', '.avi'];
+    const videoFiles = files
+      .filter(file => videoExtensions.some(ext => file.toLowerCase().endsWith(ext)))
+      .sort(); // Sort alphabetically
+    
+    res.json({ 
+      success: true, 
+      videos: videoFiles,
+      count: videoFiles.length 
+    });
+  } catch (error) {
+    console.error('Error reading video directory:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get current user
-app.get('/api/user', basicAuth, (req, res) => {
+app.get('/api/user', requireAuth, (req, res) => {
   if (req.session.annotatorName) {
     res.json({ name: req.session.annotatorName });
   } else {
@@ -215,7 +615,7 @@ app.get('/api/user', basicAuth, (req, res) => {
 });
 
 // Logout
-app.post('/api/logout', basicAuth, (req, res) => {
+app.post('/api/logout', requireAuth, (req, res) => {
   req.session.destroy();
   res.json({ success: true });
 });
@@ -225,7 +625,7 @@ app.post('/api/logout', basicAuth, (req, res) => {
 // ============================================================================
 
 // Get existing annotations for video list
-app.post('/api/get-annotations-for-videos', basicAuth, async (req, res) => {
+app.post('/api/get-annotations-for-videos', requireAuth, async (req, res) => {
   try {
     const { videoFilenames } = req.body;
     const annotatorName = req.session.annotatorName;
@@ -260,7 +660,7 @@ app.post('/api/get-annotations-for-videos', basicAuth, async (req, res) => {
 });
 
 // Get existing annotations for a video
-app.get('/api/annotations/:videoFilename', basicAuth, async (req, res) => {
+app.get('/api/annotations/:videoFilename', requireAuth, async (req, res) => {
   try {
     const annotatorName = req.session.annotatorName;
     if (!annotatorName) {
@@ -284,7 +684,7 @@ app.get('/api/annotations/:videoFilename', basicAuth, async (req, res) => {
 });
 
 // Save annotation
-app.post('/api/annotations', basicAuth, async (req, res) => {
+app.post('/api/annotations', requireAuth, async (req, res) => {
   try {
     const annotatorName = req.session.annotatorName;
     if (!annotatorName) {
@@ -300,6 +700,9 @@ app.post('/api/annotations', basicAuth, async (req, res) => {
       otherActivities: req.body.otherActivities || [],
       otherActivitiesConfidence: req.body.otherActivitiesConfidence,
       anyoneInteracting: req.body.anyoneInteracting,
+      isTraining: req.body.isTraining || false,
+      attemptNumber: req.body.attemptNumber || '',
+      taskType: req.body.taskType || 'do',
       updatedAt: new Date()
     };
 
@@ -317,7 +720,7 @@ app.post('/api/annotations', basicAuth, async (req, res) => {
 });
 
 // Get all annotations for current user
-app.get('/api/annotations', basicAuth, async (req, res) => {
+app.get('/api/annotations', requireAuth, async (req, res) => {
   try {
     const annotatorName = req.session.annotatorName;
     if (!annotatorName) {
@@ -342,8 +745,9 @@ app.get('/api/export', async (req, res) => {
       return res.status(401).json({ error: 'Not logged in' });
     }
 
+    // Get both training and main annotations
     const annotations = await Annotation.find({ annotatorName })
-      .sort({ updatedAt: -1 })
+      .sort({ isTraining: 1, attemptNumber: 1, updatedAt: -1 })
       .lean();
 
     if (annotations.length === 0) {
@@ -357,7 +761,9 @@ app.get('/api/export', async (req, res) => {
     // Flatten arrays to comma-separated strings
     const flattenedAnnotations = annotations.map(ann => ({
       ...ann,
-      otherActivities: (ann.otherActivities || []).join('; ')
+      otherActivities: (ann.otherActivities || []).join('; '),
+      isTraining: ann.isTraining || false,
+      attemptNumber: ann.attemptNumber || ''
     }));
 
     const csvWriter = createObjectCsvWriter({
@@ -380,12 +786,12 @@ app.get('/api/export', async (req, res) => {
 });
 
 // Get dropdown options
-app.get('/api/options', basicAuth, (req, res) => {
+app.get('/api/options', requireAuth, (req, res) => {
   res.json({
     activities: [
       "cleaning", "cooking", "conversing", "drawing", "drinking", "gardening", 
       "getting dressed", "looking around", "meal time", "moving around",
-      "music time", "reading", "playing", "screen time", "other"
+      "music time", "reading time", "playing", "screen time", "other"
     ],
     confidenceLevels: ["1", "2", "3"]
   });
@@ -398,49 +804,58 @@ app.get('/api/options', basicAuth, (req, res) => {
 // Store clip alignment data in memory
 let clipAlignmentData = [];
 
-// Load CSV data from file
-function loadClipAlignmentCSV(csvPath) {
-  clipAlignmentData = [];
-  return new Promise((resolve, reject) => {
-    fs.createReadStream(csvPath)
-      .pipe(csv())
-      .on('data', (row) => {
-        clipAlignmentData.push({
-          annotatorIndex: parseInt(row.annotator_index),
-          utterance: row.utterance,
-          distractorUtt1: row.distractor_utt1,
-          distractorUtt2: row.distractor_utt2,
-          distractorUtt3: row.distractor_utt3,
-          imagePath: row.image_path,
-          distractorImg1: row.distractor_img1,
-          distractorImg2: row.distractor_img2,
-          distractorImg3: row.distractor_img3
-        });
-      })
-      .on('end', () => {
-        console.log(`✓ Loaded ${clipAlignmentData.length} clip alignment items`);
-        resolve();
-      })
-      .on('error', reject);
-  });
-}
+// Catch trials
+let catchTrials = [];
+
+const catchTrialFieldMap = {
+  utterance: 'utterance',
+  distractorUtt1: 'distractor_utt1',
+  distractorUtt2: 'distractor_utt2',
+  distractorUtt3: 'distractor_utt3',
+  imagePath: 'image_path',
+  distractorImg1: 'distractor_img1',
+  distractorImg2: 'distractor_img2',
+  distractorImg3: 'distractor_img3',
+  annotatorIndex: 'annotator_index'
+};
+
+const clipAlignmentFieldMap = {
+  ...catchTrialFieldMap
+};
 
 // Load CSV on startup if file exists
 const clipAlignmentCSVPath = path.join(__dirname, 'data', 'clip_alignment.csv');
+const catchTrialsCSVPath = path.join(__dirname, 'data', 'catch_trials.csv');
 if (fs.existsSync(clipAlignmentCSVPath)) {
-  loadClipAlignmentCSV(clipAlignmentCSVPath).catch(err => {
-    console.error('Error loading clip alignment CSV:', err);
-  });
+  loadCSV(clipAlignmentCSVPath, clipAlignmentFieldMap)
+    .then(loadedClipAlignmentData => {
+      clipAlignmentData = loadedClipAlignmentData;
+      console.log(`Loaded ${clipAlignmentData.length} clip alignment items`);
+    })
+    .catch(err => {
+      console.error('Error loading clip alignment CSV:', err);
+    });
+}
+
+if (fs.existsSync(catchTrialsCSVPath)) {
+  loadCSV(catchTrialsCSVPath, catchTrialFieldMap)
+    .then(catchTrialsData => {
+      catchTrials = catchTrialsData;
+      console.log(`Loaded ${catchTrials.length} catch trial items`);
+    })
+    .catch(err => {
+      console.error('Error loading catch trials CSV:', err);
+    });
 }
 
 // Upload/reload clip alignment CSV
-app.post('/api/clip-alignment/upload-csv', basicAuth, csvUpload.single('csvFile'), async (req, res) => {
+app.post('/api/clip-alignment/upload-csv', requireAuth, csvUpload.single('csvFile'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    await loadClipAlignmentCSV(req.file.path);
+    clipAlignmentData = await loadCSV(req.file.path, clipAlignmentFieldMap);
     
     // Clean up uploaded file
     fs.unlinkSync(req.file.path);
@@ -494,15 +909,29 @@ app.post('/api/clip-alignment/register', async (req, res) => {
         break;
       }
     }
-    
+    let testRun = false;
     if (nextIndex === null) {
-      return res.status(400).json({ 
-        error: 'All annotation indices have been assigned (0-79)' 
-      });
+      if (prolificPid != "test" && prolificPid != "images" && prolificPid != "utterances" && prolificPid != "test_utterances") {
+        return res.status(400).json({ 
+          error: 'All annotation indices have been assigned (0-79)' 
+        });
+      } else {
+        testRun = true;
+        nextIndex = 1;
+      }
     }
 
     // Determine mode based on annotation index (even = images, odd = utterances)
-    const mode = nextIndex % 2 === 0 ? 'images' : 'utterances';
+    let mode = nextIndex % 2 === 0 ? 'images' : 'utterances';
+
+    if (prolificPid == "test" || prolificPid == "images") {
+      mode = "images";
+    } else if (prolificPid == "utterances" || prolificPid == "test_utterances") {
+      mode = "utterances";
+    }
+    if (testRun && prolificPid.startsWith("test")) {
+      nextIndex = 1;
+    }
 
     // Create new user
     user = new ProlificUser({
@@ -512,9 +941,9 @@ app.post('/api/clip-alignment/register', async (req, res) => {
       studyId: studyId || 'unknown',
       sessionId: sessionId || 'unknown'
     });
-    
-    await user.save();
-
+    if (!testRun) {
+      await user.save();
+    }
     req.session.prolificPid = user.prolificPid;
     req.session.annotatorIndex = user.annotatorIndex;
 
@@ -558,11 +987,21 @@ app.get('/api/clip-alignment/load', async (req, res) => {
       });
     }
 
+    // Start with a copy of filteredData
+    const combinedData = [...filteredData];
+
+    // Insert all catch trials at random positions
+    catchTrials.forEach(catchTrial => {
+      const randomIndex = Math.floor(Math.random() * (combinedData.length + 1));
+      combinedData.splice(randomIndex, 0, catchTrial);
+    });
+
+    console.log(`Combined data length: ${combinedData.length}`);
     console.log(`✓ Loaded ${filteredData.length} items for annotator_index ${annotatorIndex}`);
 
     res.json({ 
       success: true,
-      annotations: filteredData 
+      annotations: combinedData, 
     });
   } catch (error) {
     console.error('Load annotations error:', error);
@@ -582,6 +1021,9 @@ app.post('/api/clip-alignment/results', async (req, res) => {
     const savedResults = [];
     
     for (const result of results) {
+      if (catchTrials.map(ct => ct.imagePath).includes(result.imagePath || result.image_path)) {
+        result.mode = result.mode + "_AG";
+      }
       const alignmentData = {
         prolificPid: result.prolific_pid,
         annotatorIndex: result.annotator_index,
@@ -627,8 +1069,8 @@ app.post('/api/clip-alignment/results', async (req, res) => {
 // Export clip alignment results
 app.get('/api/clip-alignment/export', async (req, res) => {
   try {
-    const mode = req.query.mode; // Optional: filter by mode
-    const annotatorIndex = req.query.annotator_index; // Optional: filter by index
+    const mode = req.query.mode;
+    const annotatorIndex = req.query.annotator_index;
     
     const query = {};
     if (mode) {
@@ -724,12 +1166,22 @@ app.use('/api/clip-alignment/images', express.static(clipImagesDir));
 // START SERVER
 // ============================================================================
 
-server.listen(PORT, '0.0.0.0', () => {
-  const protocol = server instanceof require('https').Server ? 'https' : 'http';
-  console.log(`✓ Server running on ${protocol}://localhost:${PORT}`);
-  console.log(`✓ API available at ${protocol}://localhost:${PORT}/api`);
-  console.log(`✓ Activity Annotations at ${protocol}://localhost:${PORT}/experiment/index.html`);
-  console.log(`✓ Clip Alignment at ${protocol}://localhost:${PORT}/experiment/clipalignment.html`);
+// Load gold standards before starting server
+loadGoldStandards().then(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    const protocol = server instanceof require('https').Server ? 'https' : 'http';
+    console.log(`✓ Server running on ${protocol}://localhost:${PORT}`);
+    console.log(`✓ API available at ${protocol}://localhost:${PORT}/api`);
+    console.log(`✓ Activity Annotations at ${protocol}://localhost:${PORT}/experiment/activities.html`);
+    console.log(`✓ Clip Alignment at ${protocol}://localhost:${PORT}/experiment/clipalignment.html`);
+  });
+}).catch(err => {
+  console.error('Failed to load gold standards, starting server anyway:', err);
+  server.listen(PORT, '0.0.0.0', () => {
+    const protocol = server instanceof require('https').Server ? 'https' : 'http';
+    console.log(`✓ Server running on ${protocol}://localhost:${PORT}`);
+    console.log(`⚠ Warning: Gold standards may not be loaded`);
+  });
 });
 
 module.exports = app;
