@@ -11,11 +11,27 @@ library(glue)
 library(tidytext)
 library(irr)
 library(psych)
+source("validation_helpers.R")
 ```
 
 ```{r}
-annotations <- read.csv(here("data/completed_annotations/activity_annotations.csv"))
-df_cleaned <- read.csv(here("data/all_contexts_cleaned.csv"))
+annotations_see <- read.csv(here("data/completed_annotations/activity_annotations_see.csv")) |>
+  filter(taskType == "see") |>
+  arrange(updatedAt) |>
+  group_by(videoFilename, annotatorName) |>
+  slice_tail(n = 1) |>
+  ungroup()
+
+annotations_do <- read.csv(here("data/completed_annotations/activity_annotations_do.csv")) |>
+  filter(taskType != "see") |>
+  mutate(primaryActivityOther = "") |>
+  arrange(updatedAt) |>
+  group_by(videoFilename, annotatorName) |>
+  slice_tail(n = 1) |>
+  ungroup()
+
+annotations <- annotations_see #annotations_do
+#df_cleaned <- read.csv(here("data/all_contexts_cleaned.csv"))
 annotators = c("elenahc", "m1deng")
 ```
 
@@ -40,7 +56,8 @@ interaction_wide <- main_annotations %>%
     names_from = annotatorName,
     values_from = anyoneInteracting,
     names_prefix = "interaction_"
-  )
+  ) |>
+  filter(if_all(everything(), ~ !is.na(.)))
 
 primary_activity_wide <- main_annotations %>%
   select(videoFilename, annotatorName, primaryActivity) %>%
@@ -48,7 +65,8 @@ primary_activity_wide <- main_annotations %>%
     names_from = annotatorName,
     values_from = primaryActivity,
     names_prefix = "primary_"
-  )
+  ) |>
+  filter(if_all(everything(), ~ !is.na(.)))
 
 # Get all unique categories
 all_interactions <- unique(main_annotations$anyoneInteracting)
@@ -80,8 +98,8 @@ interaction_confusion <- create_pairwise_comparisons_single(
 plot_confusion_counts(
   interaction_confusion,
   "Anyone Interacting: Counts",
-  "m1deng", #x-axis: predicted
-  "elenahc" #y-axis: actual
+  "rater 1", #x-axis: predicted
+  "rater 2" #y-axis: actual
 )
 
 plot_confusion_proportions(
@@ -113,22 +131,22 @@ primary_confusion <- create_pairwise_comparisons_single(
 plot_confusion_counts(
   primary_confusion,
   "Primary Activity: Counts",
-  "m1deng", #x-axis: predicted
-  "elenahc" #y-axis: actual
+  "rater 1", #x-axis: predicted
+  "rater 2" #y-axis: actual
 )
 
 plot_confusion_proportions(
   primary_confusion,
   "Primary Activity: Proportions",
-  "m1deng", #x-axis: predicted
-  "elenahc" #y-axis: actual
+  "rater 1", #x-axis: predicted
+  "rater 2" #y-axis: actual
 )
 
 plot_confusion_pmi(
   primary_confusion,
   "Primary Activity: PMI",
-  "m1deng", #x-axis: predicted
-  "elenahc" #y-axis: actual
+  "rater 1", #x-axis: predicted
+  "rater 2" #y-axis: actual
 )
 
 # Calculate agreement
@@ -142,7 +160,6 @@ print(paste("Cohen's Kappa for primaryActivity:", round(kappa_primary$value, 3))
 # 3. EXPANDED ACTIVITIES (Primary + Other Activities)
 ```{r}
 print("=== EXPANDED ACTIVITIES (Primary + Other) ===")
-
 
 # For confusion matrix with expanded activities, we need to check overlap
 # This creates binary agreement: do any activities overlap between annotators?
@@ -166,7 +183,7 @@ expanded_agreement <- expanded_wide %>%
 
 # For confusion matrix with expanded activities, treat primary as "actual"
 # and check if it appears in the other annotator's expanded list
-expanded_comparison <- expanded_annotations %>%
+expanded_comparison <- main_annotations %>%
   select(videoFilename, annotatorName, primaryActivity, all_activities) %>%
   pivot_wider(
     names_from = annotatorName,
@@ -227,7 +244,7 @@ plot_confusion_pmi(
 # Calculate agreement for each video across all measures
 video_difficulty <- main_annotations %>%
   # Add video order (sorted by videoFilename descending, then index+1)
-  arrange(desc(videoFilename)) %>%
+  arrange(videoFilename) %>%
   mutate(video_order = row_number()) %>%
   arrange(videoFilename) %>%
   
@@ -275,7 +292,9 @@ video_difficulty <- main_annotations %>%
   ) %>%
   
   # Sort by difficulty (easiest to hardest)
-  arrange(desc(composite_agreement), videoFilename)
+  arrange(desc(composite_agreement), videoFilename) |>
+  arrange(video_order) |>
+  mutate(video_order = row_number())
 
 # View summary
 print("=== VIDEO DIFFICULTY SUMMARY ===")
@@ -301,12 +320,12 @@ video_difficulty %>%
   print()
 
 # View hardest videos
-video_difficulty %>%
+hard <- video_difficulty %>%
   arrange(composite_agreement) |>
   select(videoFilename, video_order, interaction_agreement, 
          primary_agreement, expanded_agreement, composite_agreement) %>%
-  head(10) %>%
-  print()
+  head(10) |>
+  left_join(expanded_agreement)
 ```
 
 ```{r}
