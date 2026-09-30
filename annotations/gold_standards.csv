@@ -1,0 +1,59 @@
+video_filename,order,primary_activity,anyone_interacting,type,modality,pa_reasoning,ai_reasoning
+00510001_2024-12-05_2_c7f135e37d_processed_034.mp4,,drawing,no,confusing,do,,
+00680001_2023-04-15_2_af70a91b3b_processed_012.mp4,1,being moved around,yes,example,do,"The child in this clip is primarily being moved around by their caregiver. While the child is also looking around, that activity is secondary to the action of being moved around. Since a child is always looking around, the annotation should only be used when there is no more salient activity present that the child is doing.",The caregiver is oriented toward the child and is physically moving the child around.
+00510002_2024-10-22_1_c66b060162_processed_050.mp4,2,reading time,yes,example,do,The child is sharing a book with a social partner. The book is visible at the bottom of the frame and is being actively pointed at.,A caregiver is coded as present due to the presence of an adult hand in the video. This activity is commonly supported by a social partner at this age.
+00420001_2024-05-12_2_4e4b1fb31f_processed_025.mp4,3,playing,no,example,do,"The child grabs the maraca and actively moves it. Since the child appears to be using the maraca as a toy and moving it around, it is considered playing.","Adults are present, but no active interaction from an adult toward the child is observed (e.g., no pointing or eye contact)."
+00510001_2024-04-21_2_b4f0657787_processed_020.mp4,4,gardening,yes,na,do,The primary activity is coded as gardening because the video takes place outdoors and a plant pot is positioned directly in front of the child.,"The child reaches toward the caregiver, and the caregiver responds by extending a hand."
+00240001_2024-07-12_1_aafb906c19_processed_000.mp4,5,meal time,no,example,do,"The child appears to be seated in a dining area, with food and a water bottle placed on the table in front of the child. The child appears to be reaching toward the water bottle or food.",No one else is present in the video
+00240001_2024-12-01_2_950fe3edce_processed_062.mp4,6,getting dressed,yes,example,do,The caregiver is putting on the shoes for the child.,The caregiver is physically interacting with the child
+00400001_2023-06-21_2_78f629b94b_processed_068.mp4,7,crawling,no,example,do,The child appears to be moving through a room; the camera angle suggests movement close to the ground.,No one else is present in the video
+00320003_2024-11-09_3_d65a1c42c7_processed_035.mp4,8,screen time,no,example,do,"For the entirety of the video, the child's attention is focused on the tv",No one else is present in the video
+00350002_2024-12-12_2_ff89daa357_processed_041.mp4,9,looking around,no,example,do,The child's gaze shifts slightly around the room. No other activity is evident,"Another child is present in the room, but does not seem to be engaging with the headcam-wearing child"
+00680001_2023-05-07_2_c4f79965be_processed_018.mp4,10,walking,no,example,do,"The child is moving around the room, looking at various things. Many walking clips are ambiguous because the child is doing other more salient activities like playing. In this video, walking is the only thing actively happening.",No one else is present in the video
+00510001_2024-06-02_1_c17282fc3b_processed_035.mp4,12,drinking,yes,example,do,An adult appears to be helping the child drink from a cup,"An adult is actively involved "
+00590001_2024-09-27_1_b17e4f8769_processed_057.mp4,13,music time,no,example,do,"A piano is visible, and the children is playing with it. This is coded as ""music time instead of ""playing"" because it involves an instrument",No one else is present in the video
+00500001_2024-06-29_1_27bb44f666_processed_010.mp4,14,drawing,no,example,do,"The child's hand is holding a marker, which they are using on a whiteboard",No other person visible.
+00370001_2024-02-10_4_d2cfc75810_processed_063.mp4,15,playing,no,example,do,The child is playing with a book but is not actually reading the book so the type of activity is coded as 'playing.' Reading time usually involves another person.,No other person visible.
+00320003_2024-07-07_1_1a765e701a_processed_057.mp4,1,playing,no,gold,do,,
+00220001_2024-03-06_1_2a74025141_processed_008.mp4,2,meal time,yes,gold,do,,
+00720001_2023-07-08_1_093ff171d1_processed_011.mp4,3,being moved around,yes,gold,do,,
+00400001_2023-08-25_1_9ad5e22aaa_processed_037.mp4,4,screen time,no,gold,do,,
+00370002_2024-05-18_3_e23c0133c0_processed_023.mp4,5,looking around,no,gold,do,,
+00400003_2024-04-12_1_78fc11d62d_processed_057.mp4,6,playing,yes,gold,do,,
+00510002_2024-11-12_1_2e81fea59c_processed_055.mp4,7,reading time,yes,gold,do,,
+00230001_2024-04-14_1_da1653faac_processed_007.mp4,8,meal time,no,gold,do,,
+00320003_2024-03-08_1_7484c17533_processed_060.mp4,9,being moved around,yes,gold,do,,
+00400001_2023-09-23_1_3aa820473e_processed_057.mp4,10,screen time,no,gold,do,,
+00240001_2023-11-26_1_bd6fb31b2c_processed_096.mp4,11,meal time,yes,gold,do,,
+00400001_2023-09-28_1_ffe2cfdbd3_processed_064.mp4,12,being moved around,yes,gold,do,,
+00400002_2024-01-06_2_d6accc9902_processed_018.mp4,13,playing,no,gold,do,,
+00240001_2023-11-25_2_c9f28edff3_processed_068.mp4,14,looking around,no,gold,do,,
+00400003_2024-05-30_3_ac6e331884_processed_004.mp4,15,screen time,no,gold,do,,
+00400003_2024-10-13_4_1bfced7634_processed_064.mp4,11,conversing,yes,example,see,"The child's gaze is focused on an adult, who appears to be talking and directing their attention to the child","Since the adult appears to be talking and directing their attention to the child, we annotate anyone interacting as 'yes'"
+00820001_2023-12-19_2_5ed57aefdf_processed_067.mp4,3,playing,yes,example,see,"The caregiver appears to be playing with a baby doll so we annotate it as the child is seeing ""playing"".","Since the adult appears to be talking and directing their attention to the child, we annotate anyone interacting as 'yes'"
+00510002_2024-09-27_1_4bc44bcdd0_processed_046.mp4,1,reading time,yes,example,see,"The child’s gaze is directed toward a picture book held by an adult. Both the adult and the child frequently point to pictures on the page, which shows a shared book-reading activity. ","Since the adult appears to be holding the book and frequently pointing to it, we annotate anyone interacting as 'yes'."
+00320003_2024-11-17_3_57effbf613_processed_006.mp4,,conversing,yes,gold,na,,
+00400001_2023-08-24_1_f44f05ca5f_processed_009.mp4,,meal time,yes,example,see,"The child’s gaze is directed toward the caregiver, who appears to be eating from a bowl and feeding the child. This interaction is counted as a “meal time” activity.","Since the adult appears to be eating and feeding the child, we annotate anyone interacting as 'yes'."
+00400001_2023-09-23_1_3aa820473e_processed_057.mp4,,screen time,no,example,see,"The child’s gaze is directed toward the table, where a phone is playing a video. Since there is no other observable looking behaviors, this is counted as a “screen time” activity.","There is no one in the video seems to be interacting with the child, therefore coded anyone interacting as 'no'."
+00510001_2024-04-13_2_c4a790bb60_processed_011.mp4,,music time,no,example,see,The child’s gaze is directed toward a man playing the piano. This is categorized as “music time.”,"The man in the video is playing the piano but is not facing or interacting with the child, therefore coded anyone interacting as 'no'."
+00820001_2024-04-21_4_cfa002ffc4_processed_013.mp4,,drawing,no,example,see,"The child grasps the chalk and actively makes marks on the ground, indicating engagement in a drawing activity.","There is no one in the video seems to be interacting with the child, therefore coded anyone interacting as 'no'."
+00240001_2024-06-02_2_43f6a17f68_processed_045.mp4,,drinking,no,example,see,"The child’s gaze is directed toward a man sitting at the dining table, who picks up a cup from the table and drinks water from it. The activity observed by the child is categorized as “drinking.”","The man in the video shows no interaction with the child (e.g., no eye contact, physical interaction, or conversation); therefore, “anyone interacting” was coded as “no.”"
+00320001_2024-05-04_3_bb0092f555_processed_067.mp4,,gardening,no,example,see,The caregiver is moving two plants and appears to be removing weeds from one of them. This activity is coded as “gardening.”,"No one in the video shows interaction with the child (e.g., eye contact or conversation); therefore, “anyone interacting” was coded as “no.”",
+00370001_2024-05-05_3_97bfed6698_processed_022.mp4,,getting dressed,yes,example,see,"The child’s gaze is directed toward the garage, where another child in the video is sitting down and putting on shoes. This activity is coded as “getting dressed.”","No one in the video shows interaction with the child (e.g., eye contact or conversation); therefore, “anyone interacting” was coded as “no.”"
+00560001_2023-08-26_3_76b5673034_processed_005.mp4,,cleaning,no,example,see,The person in the video is holding a mop and actively moving it across the floor indicating that they are cleaning the floor. This activity is coded as “cleaning.,There is no one in the video seems to be interacting with the child therefore coded anyone interacting as 'no'.,
+00510002_2024-08-26_2_d6a6463cd7_processed_009.mp4,,cooking,no,example,see,The caregiver is placing banana slices on top of pancakes that appear to be cooking on a pan on the stove. A bowl containing bananas and peanut butter nearby suggests that this is a meal preparation or cooking activity,There is no one in the video seems to be interacting with the child therefore coded anyone interacting as 'no'.,
+00320003_2024-03-03_1_d0c3250eb5_processed_101.mp4,1,"conversing",yes,gold,see
+00420001_2024-06-09_1_941b9b5f1b_processed_027.mp4,2,"cleaning",no,gold,see
+00820001_2023-05-06_2_578b918303_processed_007.mp4,3,playing,no,gold,see
+00320002_2024-09-05_2_946f306519_processed_023.mp4,4,screen time,no,gold,see
+00400003_2023-12-17_3_890b6a5cad_processed_067.mp4,5,meal time,yes,gold,see
+00400001_2024-08-27_1_9627aa4127_processed_016.mp4,6,screen time,no,gold,see
+00320002_2024-06-03_1_e20fa612a1_processed_043.mp4,7,cleaning,no,gold,see
+00370002_2024-05-03_3_bb6f5ab781_processed_039.mp4,8,"playing",no,gold,see
+00370002_2024-09-29_1_2c3456c8fe_processed_047.mp4,9,"cooking",no,gold,see
+00560001_2023-05-01_1_24d3b95737_processed_066.mp4,10,meal time,yes,gold,see
+00240001_2023-12-08_1_30326063f1_processed_067.mp4,11,meal time,yes,gold,see
+00560001_2023-05-28_1_ed45a7d063_processed_001.mp4,12,conversing,yes,gold,see
+00820001_2024-01-12_1_f86ff001a3_processed_029.mp4,13,cooking,yes,gold,see
+00400003_2024-04-12_1_78fc11d62d_processed_057.mp4,14,"playing",yes,gold,see
+00820001_2024-04-09_2_cc52cacdcd_processed_078.mp4,15,reading time,yes,gold,see

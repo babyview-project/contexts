@@ -13,3 +13,4 @@ outputs/
 annotations/node_modules
 annotations/clip_images/
 annotations/credentials
+annotations/*videos

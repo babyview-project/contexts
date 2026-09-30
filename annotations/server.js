@@ -78,6 +78,8 @@ const AnnotationSchema = new mongoose.Schema({
   description: String,
   primaryActivity: { type: String, required: true },
   primaryActivityConfidence: { type: String, required: true },
+  primaryActivityOther: String, // for when primaryActivity is "other"
+  otherActivitiesOther: [String],
   otherActivities: [String],
   otherActivitiesConfidence: { type: String, required: true },
   anyoneInteracting: { type: String, required: true },
@@ -184,93 +186,56 @@ function loadCSV(csvPath, fieldMap) {
 
 // Load gold standards from CSV
 async function loadGoldStandards() {
-  const goldStandardsDoingPath = path.join(__dirname, 'gold_standards_doing.csv');
-  const goldStandardsSeeingPath = path.join(__dirname, 'gold_standards_seeing.csv');
+  const goldStandardsPath = path.join(__dirname, 'gold_standards.csv');
   
   console.log('Attempting to load gold standards...');
   
-  // Load DOING gold standards
-  if (fs.existsSync(goldStandardsDoingPath)) {
-    try {
-      const dataDoing = await loadCSV(goldStandardsDoingPath, {
-        videoFilename: 'video_filename',
-        primaryActivity: 'primary_activity',
-        primaryActivityConfidence: 'primary_activity_confidence',
-        otherActivities: 'other_activities',
-        otherActivitiesConfidence: 'other_activities_confidence',
-        anyoneInteracting: 'anyone_interacting',
-        type: 'type',
-        primaryActivityReasoning: 'pa_reasoning',
-        otherActivitiesReasoning: 'oa_reasoning',
-        interactingReasoning: 'ao_reasoning'
-      });
-
-      // Parse other_activities from semicolon-separated string to array
-      dataDoing.forEach(item => {
-        if (item.otherActivities) {
-          item.otherActivities = item.otherActivities.split(';').map(s => s.trim()).filter(Boolean);
-        } else {
-          item.otherActivities = [];
-        }
-      });
-
-      goldStandardDataDoing = dataDoing;
-      exampleVideoDataDoing = dataDoing.filter(item => item.type === 'example');
-      
-      const exampleCountDoing = dataDoing.filter(item => item.type === 'example').length;
-      const goldCountDoing = dataDoing.filter(item => item.type === 'gold').length;
-      
-      console.log(`✓ Loaded ${goldCountDoing} gold standard DOING videos`);
-      console.log(`✓ Loaded ${exampleCountDoing} example DOING videos`);
-    } catch (error) {
-      console.error('✗ Error loading DOING gold standards CSV:', error);
-    }
-  } else {
-    console.warn('⚠ Gold standards DOING CSV file not found at:', goldStandardsDoingPath);
-  }
-  
-  // Load SEEING gold standards
-  if (fs.existsSync(goldStandardsSeeingPath)) {
-    try {
-      const dataSeeing = await loadCSV(goldStandardsSeeingPath, {
-        videoFilename: 'video_filename',
-        primaryActivity: 'primary_activity',
-        primaryActivityConfidence: 'primary_activity_confidence',
-        otherActivities: 'other_activities',
-        otherActivitiesConfidence: 'other_activities_confidence',
-        anyoneInteracting: 'anyone_interacting',
-        type: 'type',
-        primaryActivityReasoning: 'pa_reasoning',
-        otherActivitiesReasoning: 'oa_reasoning',
-        interactingReasoning: 'ao_reasoning'
-      });
-
-      // Parse other_activities
-      dataSeeing.forEach(item => {
-        if (item.otherActivities) {
-          item.otherActivities = item.otherActivities.split(';').map(s => s.trim()).filter(Boolean);
-        } else {
-          item.otherActivities = [];
-        }
-      });
-
-      goldStandardDataSeeing = dataSeeing;
-      exampleVideoDataSeeing = dataSeeing.filter(item => item.type === 'example');
-      
-      const exampleCountSeeing = dataSeeing.filter(item => item.type === 'example').length;
-      const goldCountSeeing = dataSeeing.filter(item => item.type === 'gold').length;
-      
-      console.log(`✓ Loaded ${goldCountSeeing} gold standard SEEING videos`);
-      console.log(`✓ Loaded ${exampleCountSeeing} example SEEING videos`);
-    } catch (error) {
-      console.error('✗ Error loading SEEING gold standards CSV:', error);
-    }
-  } else {
-    console.warn('⚠ Gold standards SEEING CSV file not found at:', goldStandardsSeeingPath);
-  }
-  
-  if (goldStandardDataDoing.length === 0 && goldStandardDataSeeing.length === 0) {
+  if (!fs.existsSync(goldStandardsPath)) {
+    console.warn('⚠ Gold standards CSV file not found at:', goldStandardsPath);
     console.warn('⚠ No gold standards loaded. Training phase will not work.');
+    return;
+  }
+
+  try {
+    const data = await loadCSV(goldStandardsPath, {
+      videoFilename: 'video_filename',
+      order: 'order',
+      primaryActivity: 'primary_activity',
+      anyoneInteracting: 'anyone_interacting',
+      type: 'type',
+      modality: 'modality',
+      primaryActivityReasoning: 'pa_reasoning',
+      interactingReasoning: 'ai_reasoning'
+    });
+
+    // Parse other_activities from semicolon-separated string to array
+    data.forEach(item => {
+      item.otherActivities = item.otherActivities
+        ? item.otherActivities.split(';').map(s => s.trim()).filter(Boolean)
+        : [];
+    });
+
+    // Split by modality
+    const doingData   = data.filter(item => item.modality === 'do');
+    const seeingData  = data.filter(item => item.modality === 'see');
+
+    goldStandardDataDoing  = doingData;
+    goldStandardDataSeeing = seeingData;
+
+    exampleVideoDataDoing  = doingData.filter(item => item.type === 'example');
+    exampleVideoDataSeeing = seeingData.filter(item => item.type === 'example');
+
+    console.log(`✓ Loaded ${doingData.filter(i => i.type === 'gold').length} gold standard DOING videos`);
+    console.log(`✓ Loaded ${exampleVideoDataDoing.length} example DOING videos`);
+    console.log(`✓ Loaded ${seeingData.filter(i => i.type === 'gold').length} gold standard SEEING videos`);
+    console.log(`✓ Loaded ${exampleVideoDataSeeing.length} example SEEING videos`);
+
+    if (goldStandardDataDoing.length === 0 && goldStandardDataSeeing.length === 0) {
+      console.warn('⚠ No gold standards loaded. Training phase will not work.');
+    }
+
+  } catch (error) {
+    console.error('✗ Error loading gold standards CSV:', error);
   }
 }
 
@@ -372,11 +337,11 @@ const sampledVideosDir = path.join(__dirname, 'sampled_context_videos');
 // ROUTES - Training Videos
 // ============================================================================
 
-const exampleVideosDir = path.join(__dirname, 'example_videos');
+const contextVideosDir = path.join(__dirname, 'sampled_context_videos');
 const goldStandardVideosDir = path.join(__dirname, 'goldstandard_videos');
 
 // Create training video directories if they don't exist
-[exampleVideosDir, goldStandardVideosDir].forEach(dir => {
+[contextVideosDir, goldStandardVideosDir].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir);
     console.log(`Created directory: ${dir}`);
@@ -384,7 +349,7 @@ const goldStandardVideosDir = path.join(__dirname, 'goldstandard_videos');
 });
 
 // Serve training video files
-app.use('/training-videos', express.static(exampleVideosDir));
+app.use('/training-videos', express.static(contextVideosDir));
 app.use('/training-videos', express.static(goldStandardVideosDir));
 
 // Get example video (the one video shown with annotations)
@@ -397,14 +362,14 @@ app.get('/api/training/example-video', requireAuth, async (req, res) => {
     
     if (exampleVideos.length === 0) {
       return res.status(404).json({ 
-        error: `No example videos found for task type '${taskType}'. Please check gold_standards_${taskType === 'see' ? 'seeing' : 'doing'}.csv has rows with type=example` 
+        error: `No example videos found for task type '${taskType}'. Please check gold_standards.csv has rows with type=example` 
       });
     }
     
     // Verify video files exist
     const validVideos = [];
     for (const vid of exampleVideos) {
-      const videoPath1 = path.join(exampleVideosDir, vid.videoFilename);
+      const videoPath1 = path.join(contextVideosDir, vid.videoFilename);
       const videoPath2 = path.join(goldStandardVideosDir, vid.videoFilename);
       
       if (fs.existsSync(videoPath1) || fs.existsSync(videoPath2)) {
@@ -455,14 +420,14 @@ app.get('/api/training/gold-standard-videos', requireAuth, async (req, res) => {
     
     if (goldVideos.length === 0) {
       return res.status(404).json({ 
-        error: `No gold standard videos found for task type '${taskType}'. Please check gold_standards_${taskType === 'see' ? 'seeing' : 'doing'}.csv has rows with type=gold` 
+        error: `No gold standard videos found for task type '${taskType}'. Please check gold_standards.csv has rows with type=gold` 
       });
     }
     
     // Verify video files exist
     const videos = [];
     for (const gs of goldVideos) {
-      const videoPath1 = path.join(exampleVideosDir, gs.videoFilename);
+      const videoPath1 = path.join(contextVideosDir, gs.videoFilename);
       const videoPath2 = path.join(goldStandardVideosDir, gs.videoFilename);
       
       if (fs.existsSync(videoPath1) || fs.existsSync(videoPath2)) {
@@ -627,7 +592,8 @@ app.post('/api/logout', requireAuth, (req, res) => {
 // Get existing annotations for video list
 app.post('/api/get-annotations-for-videos', requireAuth, async (req, res) => {
   try {
-    const { videoFilenames } = req.body;
+    const { videoFilenames, taskType } = req.body;
+    console.log(taskType)
     const annotatorName = req.session.annotatorName;
     
     if (!annotatorName) {
@@ -637,11 +603,20 @@ app.post('/api/get-annotations-for-videos', requireAuth, async (req, res) => {
     if (!videoFilenames || !Array.isArray(videoFilenames)) {
       return res.status(400).json({ error: 'Video filenames array required' });
     }
-
-    const existingAnnotations = await Annotation.find({
-      annotatorName,
-      videoFilename: { $in: videoFilenames }
+    let existingAnnotations;
+    if (taskType == "see") {
+          existingAnnotations = await Annotation.find({
+          annotatorName,
+          videoFilename: { $in: videoFilenames },
+          taskType: taskType
+        });
+    } else {
+          existingAnnotations = await Annotation.find({
+          annotatorName,
+          videoFilename: { $in: videoFilenames },
+          taskType: { $ne: 'see' } // exclude 'see' annotations for 'do' task so that we also get blank type entries
     });
+    }
 
     // Create a map of existing annotations
     const annotationMap = {};
@@ -699,6 +674,8 @@ app.post('/api/annotations', requireAuth, async (req, res) => {
       primaryActivityConfidence: req.body.primaryActivityConfidence,
       otherActivities: req.body.otherActivities || [],
       otherActivitiesConfidence: req.body.otherActivitiesConfidence,
+      primaryActivityOther: req.body.primaryActivityOther || '',
+      otherActivitiesOther: req.body.otherActivitiesOther || [],
       anyoneInteracting: req.body.anyoneInteracting,
       isTraining: req.body.isTraining || false,
       attemptNumber: req.body.attemptNumber || '',
@@ -707,7 +684,7 @@ app.post('/api/annotations', requireAuth, async (req, res) => {
     };
 
     const result = await Annotation.findOneAndUpdate(
-      { annotatorName, videoFilename: req.body.videoFilename },
+      { annotatorName, videoFilename: req.body.videoFilename, taskType: annotationData.taskType },
       annotationData,
       { upsert: true, new: true }
     );
@@ -787,380 +764,31 @@ app.get('/api/export', async (req, res) => {
 
 // Get dropdown options
 app.get('/api/options', requireAuth, (req, res) => {
+  let activities = []
+  if (req.query.taskType == 'see') {
+    // no looking around + moving around + postural
+    activities = [
+      "cleaning", "cooking", "conversing", "crawling", "walking",
+      "drawing", "getting dressed", "eating/drinking", "playing with nature",
+      "playing with person", "playing with pet", "playing with toy", "playing with household object", 
+       "playing with instrument",
+       "dancing", "reading time", 
+       "screen time", "other"
+    ]
+  } else {
+    // no conversing + gardening
+    activities = [
+      "being moved around", "crawling", "walking", "cleaning", "looking around", 
+      "cooking", "drawing", "eating/drinking", "getting dressed", 
+       "reading time", "playing with person", "playing with pet", "playing with instrument",
+       "dancing", "playing with toy", "playing with household object", "screen time","other"
+    ]
+  }
   res.json({
-    activities: [
-      "cleaning", "cooking", "conversing", "drawing", "drinking", "gardening", 
-      "getting dressed", "looking around", "meal time", "moving around",
-      "music time", "reading time", "playing", "screen time", "other"
-    ],
+    activities: activities,
     confidenceLevels: ["1", "2", "3"]
   });
 });
-
-// ============================================================================
-// ROUTES - Clip Alignment Annotations with Prolific
-// ============================================================================
-
-// Store clip alignment data in memory
-let clipAlignmentData = [];
-
-// Catch trials
-let catchTrials = [];
-
-const catchTrialFieldMap = {
-  utterance: 'utterance',
-  distractorUtt1: 'distractor_utt1',
-  distractorUtt2: 'distractor_utt2',
-  distractorUtt3: 'distractor_utt3',
-  imagePath: 'image_path',
-  distractorImg1: 'distractor_img1',
-  distractorImg2: 'distractor_img2',
-  distractorImg3: 'distractor_img3',
-  annotatorIndex: 'annotator_index'
-};
-
-const clipAlignmentFieldMap = {
-  ...catchTrialFieldMap
-};
-
-// Load CSV on startup if file exists
-const clipAlignmentCSVPath = path.join(__dirname, 'data', 'clip_alignment.csv');
-const catchTrialsCSVPath = path.join(__dirname, 'data', 'catch_trials.csv');
-if (fs.existsSync(clipAlignmentCSVPath)) {
-  loadCSV(clipAlignmentCSVPath, clipAlignmentFieldMap)
-    .then(loadedClipAlignmentData => {
-      clipAlignmentData = loadedClipAlignmentData;
-      console.log(`Loaded ${clipAlignmentData.length} clip alignment items`);
-    })
-    .catch(err => {
-      console.error('Error loading clip alignment CSV:', err);
-    });
-}
-
-if (fs.existsSync(catchTrialsCSVPath)) {
-  loadCSV(catchTrialsCSVPath, catchTrialFieldMap)
-    .then(catchTrialsData => {
-      catchTrials = catchTrialsData;
-      console.log(`Loaded ${catchTrials.length} catch trial items`);
-    })
-    .catch(err => {
-      console.error('Error loading catch trials CSV:', err);
-    });
-}
-
-// Upload/reload clip alignment CSV
-app.post('/api/clip-alignment/upload-csv', requireAuth, csvUpload.single('csvFile'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    clipAlignmentData = await loadCSV(req.file.path, clipAlignmentFieldMap);
-    
-    // Clean up uploaded file
-    fs.unlinkSync(req.file.path);
-    
-    res.json({ 
-      success: true, 
-      count: clipAlignmentData.length,
-      message: `Loaded ${clipAlignmentData.length} items`
-    });
-  } catch (error) {
-    console.error('CSV upload error:', error);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Register Prolific user and assign annotation index
-app.post('/api/clip-alignment/register', async (req, res) => {
-  try {
-    const { prolificPid, studyId, sessionId } = req.body;
-    
-    if (!prolificPid) {
-      return res.status(400).json({ error: 'Prolific PID is required' });
-    }
-
-    // Check if user already exists
-    let user = await ProlificUser.findOne({ prolificPid });
-    
-    if (user) {
-      // Return existing assignment
-      req.session.prolificPid = user.prolificPid;
-      req.session.annotatorIndex = user.annotatorIndex;
-      
-      return res.json({
-        success: true,
-        annotatorIndex: user.annotatorIndex,
-        mode: user.mode,
-        existing: true
-      });
-    }
-
-    // Find the next available annotation index (0-79)
-    const assignedIndices = await ProlificUser.distinct('annotatorIndex');
-    let nextIndex = null;
-    
-    for (let i = 0; i < 80; i++) {
-      if (!assignedIndices.includes(i)) {
-        nextIndex = i;
-        break;
-      }
-    }
-    let testRun = false;
-    if (nextIndex === null) {
-      if (prolificPid != "test" && prolificPid != "images" && prolificPid != "utterances" && prolificPid != "test_utterances") {
-        return res.status(400).json({ 
-          error: 'All annotation indices have been assigned (0-79)' 
-        });
-      } else {
-        testRun = true;
-        nextIndex = 1;
-      }
-    }
-
-    // Determine mode based on annotation index (even = images, odd = utterances)
-    let mode = nextIndex % 2 === 0 ? 'images' : 'utterances';
-
-    if (prolificPid == "test" || prolificPid == "images") {
-      mode = "images";
-    } else if (prolificPid == "utterances" || prolificPid == "test_utterances") {
-      mode = "utterances";
-    }
-    if (testRun && prolificPid.startsWith("test")) {
-      nextIndex = 1;
-    }
-
-    // Create new user
-    user = new ProlificUser({
-      prolificPid,
-      annotatorIndex: nextIndex,
-      mode,
-      studyId: studyId || 'unknown',
-      sessionId: sessionId || 'unknown'
-    });
-    if (!testRun) {
-      await user.save();
-    }
-    req.session.prolificPid = user.prolificPid;
-    req.session.annotatorIndex = user.annotatorIndex;
-
-    console.log(`✓ Registered new Prolific user: ${prolificPid}, Index: ${nextIndex}, Mode: ${mode}`);
-
-    res.json({
-      success: true,
-      annotatorIndex: nextIndex,
-      mode,
-      existing: false
-    });
-  } catch (error) {
-    console.error('Registration error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get clip alignment annotations (load data for experiment)
-app.get('/api/clip-alignment/load', async (req, res) => {
-  try {
-    if (clipAlignmentData.length === 0) {
-      return res.status(400).json({ 
-        error: 'No clip alignment data loaded. Please upload a CSV file first.' 
-      });
-    }
-
-    const annotatorIndex = parseInt(req.query.annotator_index);
-    if (isNaN(annotatorIndex)) {
-      console.log(annotatorIndex)
-      return res.status(400).json({ error: 'Valid annotator_index is required' });
-    }
-
-    // Filter data by annotation index
-    const filteredData = clipAlignmentData.filter(item => 
-      item.annotatorIndex === annotatorIndex
-    );
-
-    if (filteredData.length === 0) {
-      return res.status(400).json({ 
-        error: `No data found for annotator_index ${annotatorIndex}` 
-      });
-    }
-
-    // Start with a copy of filteredData
-    const combinedData = [...filteredData];
-
-    // Insert all catch trials at random positions
-    catchTrials.forEach(catchTrial => {
-      const randomIndex = Math.floor(Math.random() * (combinedData.length + 1));
-      combinedData.splice(randomIndex, 0, catchTrial);
-    });
-
-    console.log(`Combined data length: ${combinedData.length}`);
-    console.log(`✓ Loaded ${filteredData.length} items for annotator_index ${annotatorIndex}`);
-
-    res.json({ 
-      success: true,
-      annotations: combinedData, 
-    });
-  } catch (error) {
-    console.error('Load annotations error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Save clip alignment results
-app.post('/api/clip-alignment/results', async (req, res) => {
-  try {
-    const { results } = req.body;
-    
-    if (!results || !Array.isArray(results)) {
-      return res.status(400).json({ error: 'Invalid results format' });
-    }
-
-    const savedResults = [];
-    
-    for (const result of results) {
-      if (catchTrials.map(ct => ct.imagePath).includes(result.imagePath || result.image_path)) {
-        result.mode = result.mode + "_AG";
-      }
-      const alignmentData = {
-        prolificPid: result.prolific_pid,
-        annotatorIndex: result.annotator_index,
-        rowIndex: result.row_index,
-        mode: result.mode,
-        selectedPosition: result.selected_position,
-        correctPosition: result.correct_position,
-        isCorrect: result.is_correct,
-        utterance: result.utterance,
-        distractorUtt1: result.distractorUtt1,
-        distractorUtt2: result.distractorUtt2,
-        distractorUtt3: result.distractorUtt3,
-        imagePath: result.imagePath || result.image_path,
-        distractorImg1: result.distractorImg1 || result.distractor_img1,
-        distractorImg2: result.distractorImg2 || result.distractor_img2,
-        distractorImg3: result.distractorImg3 || result.distractor_img3,
-        timestamp: new Date(result.timestamp)
-      };
-      console.log(alignmentData)
-      const saved = await ClipAlignment.findOneAndUpdate(
-        { 
-          prolificPid: result.prolific_pid,
-          rowIndex: result.row_index,
-          mode: result.mode 
-        },
-        alignmentData,
-        { upsert: true, new: true }
-      );
-      
-      savedResults.push(saved);
-    }
-
-    res.json({ 
-      success: true, 
-      saved: savedResults.length 
-    });
-  } catch (error) {
-    console.error('Save results error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Export clip alignment results
-app.get('/api/clip-alignment/export', async (req, res) => {
-  try {
-    const mode = req.query.mode;
-    const annotatorIndex = req.query.annotator_index;
-    
-    const query = {};
-    if (mode) {
-      query.mode = mode;
-    }
-    if (annotatorIndex !== undefined) {
-      query.annotatorIndex = parseInt(annotatorIndex);
-    }
-
-    const results = await ClipAlignment.find(query)
-      .sort({ annotatorIndex: 1, rowIndex: 1 })
-      .lean();
-
-    if (results.length === 0) {
-      return res.status(400).json({ error: 'No results to export' });
-    }
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const modeStr = mode ? `_${mode}` : '';
-    const indexStr = annotatorIndex !== undefined ? `_idx${annotatorIndex}` : '';
-    const filename = `clip_alignment_results${modeStr}${indexStr}_${timestamp}.csv`;
-    const filepath = path.join(exportsDir, filename);
-
-    const csvWriter = createObjectCsvWriter({
-      path: filepath,
-      header: [
-        { id: 'prolificPid', title: 'prolific_pid' },
-        { id: 'annotatorIndex', title: 'annotator_index' },
-        { id: 'rowIndex', title: 'row_index' },
-        { id: 'mode', title: 'mode' },
-        { id: 'selectedPosition', title: 'selected_position' },
-        { id: 'correctPosition', title: 'correct_position' },
-        { id: 'isCorrect', title: 'is_correct' },
-        { id: 'utterance', title: 'utterance' },
-        { id: 'distractorUtt1', title: 'distractor_utt1' },
-        { id: 'distractorUtt2', title: 'distractor_utt2' },
-        { id: 'distractorUtt3', title: 'distractor_utt3' },
-        { id: 'imagePath', title: 'image_path' },
-        { id: 'distractorImg1', title: 'distractor_img1' },
-        { id: 'distractorImg2', title: 'distractor_img2' },
-        { id: 'distractorImg3', title: 'distractor_img3' },
-        { id: 'timestamp', title: 'timestamp' }
-      ]
-    });
-
-    await csvWriter.writeRecords(results);
-    
-    res.download(filepath, filename, (err) => {
-      if (err) {
-        console.error('Download error:', err);
-      }
-      // Clean up file after download
-      fs.unlinkSync(filepath);
-    });
-  } catch (error) {
-    console.error('Export error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get Prolific user stats (for admin/debugging)
-app.get('/api/clip-alignment/stats', async (req, res) => {
-  try {
-    const totalUsers = await ProlificUser.countDocuments();
-    const usersByMode = await ProlificUser.aggregate([
-      { $group: { _id: '$mode', count: { $sum: 1 } } }
-    ]);
-    const completedAnnotations = await ClipAlignment.aggregate([
-      { 
-        $group: { 
-          _id: { prolificPid: '$prolificPid', mode: '$mode' },
-          count: { $sum: 1 }
-        } 
-      }
-    ]);
-
-    res.json({
-      success: true,
-      totalUsers,
-      usersByMode,
-      completedAnnotations
-    });
-  } catch (error) {
-    console.error('Stats error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Serve images for clip alignment
-app.use('/api/clip-alignment/images', express.static(clipImagesDir));
 
 // ============================================================================
 // START SERVER

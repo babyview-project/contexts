@@ -79,10 +79,11 @@ async function apiCall(endpoint, options = {}) {
 }
 
 // API functions
-async function getAnnotationsForVideos(videoFilenames) {
+async function getAnnotationsForVideos(videoFilenames, taskType) {
+    console.log(taskType)
     return apiCall('/get-annotations-for-videos', {
         method: 'POST',
-        body: JSON.stringify({ videoFilenames })
+        body: JSON.stringify({ videoFilenames, taskType })
     });
 }
 
@@ -95,7 +96,7 @@ async function saveAnnotation(data) {
 }
 
 async function getOptions() {
-    return apiCall('/options');
+    return apiCall(`/options?taskType=${taskType}`);
 }
 
 async function getExampleVideo() {
@@ -431,7 +432,6 @@ const trainingIntro = {
     choices: ['Start Training']
 };
 
-// Example video walkthrough
 const exampleVideoTrial = {
     type: jsPsychCallFunction,
     async: true,
@@ -445,49 +445,128 @@ const exampleVideoTrial = {
                 return;
             }
             
-            // Add a screen for EACH example video
             exampleData.videos.forEach((video, index) => {
                 const videoUrl = `${CONFIG.API_BASE.replace('/api', '')}/training-videos/${video.videoFilename}`;
+                const isLast = index === exampleData.videos.length - 1;
+                const continueLabel = isLast ? 'Continue to Practice Videos' : 'Next Example';
                 
                 const exampleScreen = {
                     type: jsPsychHtmlButtonResponse,
                     stimulus: `
                         <style>
-                            .reasoning { font-size: 14px; color: #555; }
+                            .reasoning-box {
+                                display: none;
+                                margin-top: 6px;
+                                font-size: 14px;
+                                color: #555;
+                                background: #fffbe6;
+                                border-left: 3px solid #f0c040;
+                                padding: 8px 12px;
+                                border-radius: 4px;
+                            }
+                            .reveal-btn {
+                                margin-top: 4px;
+                                font-size: 13px;
+                                padding: 4px 12px;
+                                cursor: pointer;
+                                background: #e8e8e8;
+                                border: 1px solid #ccc;
+                                border-radius: 4px;
+                            }
+                            .reveal-btn.revealed {
+                                background: #d4edda;
+                                border-color: #a0c9a8;
+                                color: #2d6a3f;
+                            }
+                            #continue-btn {
+                                margin-top: 24px;
+                                padding: 10px 24px;
+                                font-size: 16px;
+                                background: #ccc;
+                                color: #888;
+                                border: none;
+                                border-radius: 6px;
+                                cursor: not-allowed;
+                            }
+                            #continue-btn.unlocked {
+                                background: #4a90d9;
+                                color: white;
+                                cursor: pointer;
+                            }
                         </style>
+
                         <div style="max-width: 1000px; margin: auto; padding: 10px;">
                             <h3>Example of ${video.primaryActivity}</h3>
                             <p style="font-size: 16px; margin-bottom: 20px;">
-                                Watch this example and review the correct annotations and reasoning below.<br>
-                                Example video ${index+1} of ${exampleData.videos.length} 
+                                Watch the video, then reveal each reasoning before continuing.<br>
+                                Example video ${index + 1} of ${exampleData.videos.length}
                             </p>
-                            
+
                             <div style="display: flex; gap: 20px;">
                                 <div style="flex: 1;">
                                     <video controls autoplay style="width: 100%; max-height: 60vh; background: #000;">
                                         <source src="${videoUrl}" type="video/mp4">
                                     </video>
                                 </div>
-                                
+
                                 <div style="flex: 1; background: #f5f5f5; padding: 20px; border-radius: 8px; max-height: 60vh; overflow-y: auto;">
                                     <h3>Correct Annotations:</h3>
                                     <div style="text-align: left; line-height: 2; font-size: 16px;">
-                                        <p><strong>${isSeeing ? 'Primary thing the child is seeing' : 'Primary activity that the child is doing'}:</strong> ${video.primaryActivity}</p>
-                                        <p class="reasoning">Reasoning: ${video.primaryActivityReasoning}</p>
-                                        <p><strong>Confidence:</strong> ${video.primaryActivityConfidence}/3</p>
-                                        <p><strong>${isSeeing ? 'Other things the child is seeing' : 'Other activities that the child is doing'}:</strong> ${video.otherActivities.join(', ') || 'none'}</p>
-                                        <p class="reasoning">Reasoning: ${video.otherActivitiesReasoning}</p>
-                                        <p><strong>Other activities confidence:</strong> ${video.otherActivitiesConfidence}/3</p>
-                                        <p><strong>Anyone interacting:</strong> ${video.anyoneInteracting}</p>
-                                        <p class="reasoning">Reasoning: ${video.interactingReasoning}</p>
+
+                                        <p><strong>${isSeeing ? 'Primary activity the child is seeing' : 'Primary activity the child is doing'}:</strong> ${video.primaryActivity}</p>
+                                        <button class="reveal-btn" id="reveal-primary" onclick="
+                                            document.getElementById('reasoning-primary').style.display = 'block';
+                                            this.textContent = '✓ Reasoning revealed';
+                                            this.classList.add('revealed');
+                                            this.disabled = true;
+                                            window._primaryRevealed = true;
+                                            if (window._primaryRevealed && window._interactingRevealed) {
+                                                const btn = document.getElementById('continue-btn');
+                                                btn.classList.add('unlocked');
+                                                btn.disabled = false;
+                                            }
+                                        ">Reveal reasoning</button>
+                                        <div class="reasoning-box" id="reasoning-primary">${video.primaryActivityReasoning}</div>
+
+                                        <p style="margin-top: 16px;"><strong>Anyone interacting:</strong> ${video.anyoneInteracting}</p>
+                                        <button class="reveal-btn" id="reveal-interacting" onclick="
+                                            document.getElementById('reasoning-interacting').style.display = 'block';
+                                            this.textContent = 'Reasoning revealed';
+                                            this.classList.add('revealed');
+                                            this.disabled = true;
+                                            window._interactingRevealed = true;
+                                            if (window._primaryRevealed && window._interactingRevealed) {
+                                                const btn = document.getElementById('continue-btn');
+                                                btn.classList.add('unlocked');
+                                                btn.disabled = false;
+                                            }
+                                        ">Reveal reasoning</button>
+                                        <div class="reasoning-box" id="reasoning-interacting">${video.interactingReasoning}</div>
+
+                                    </div>
+
+                                    <div style="text-align: center;">
+                                        <button id="continue-btn" disabled onclick="
+                                            if (this.classList.contains('unlocked')) {
+                                                // Click the hidden jsPsych button
+                                                document.querySelector('#jspsych-html-button-response-btngroup button').click();
+                                            }
+                                        ">${continueLabel} →</button>
+                                        <p id="continue-hint" style="font-size: 13px; color: #999; margin-top: 6px;">
+                                            Reveal both reasonings to continue
+                                        </p>
                                     </div>
                                 </div>
                             </div>
                         </div>
                     `,
-                    choices: index === exampleData.videos.length - 1 
-                        ? ['Continue to Practice Videos'] 
-                        : ['Next Example']
+                    choices: ['__hidden__'],
+                    button_html: '<button style="display:none" class="jspsych-btn">%choice%</button>',
+                    on_load: function() {
+                        // Reset reveal state for each screen
+                        window._primaryRevealed = false;
+                        window._interactingRevealed = false;
+                    }
                 };
                 
                 jsPsych.addNodeToEndOfTimeline(exampleScreen);
@@ -514,7 +593,7 @@ const loadTrainingVideos = {
             const goldData = await getGoldStandardVideos();
             console.log(goldData)
             if (!goldData.success || !goldData.videos || goldData.videos.length < CONFIG.TRAINING_VIDEOS_PER_ATTEMPT) {
-                alert('Not enough gold standard videos available for training');
+                console.log('Not enough gold standard videos available for training');
                 done({ success: false });
                 return;
             }
@@ -530,7 +609,7 @@ const loadTrainingVideos = {
             done({ success: true });
             
         } catch (error) {
-            alert('Failed to load training videos: ' + error.message);
+            console.log('Failed to load training videos: ' + error.message);
             done({ success: false });
         }
     }
@@ -688,15 +767,13 @@ const trainingFeedback = {
                             </div>
                             <div>
                                 <h4>Your Answers:</h4>
-                                <p><strong>Primary:</strong> ${result.userAnswers.primaryActivity || 'N/A'}</p>
-                                <p><strong>Other:</strong> ${(result.userAnswers.otherActivities || []).filter(a => a !== 'none').join(', ') || 'none'}</p>
-                                <p><strong>Interacting:</strong> ${result.userAnswers.anyoneInteracting || 'N/A'}</p>
+                                <p><strong>Primary activity:</strong> ${result.userAnswers.primaryActivity || 'N/A'}</p>
+                                <p><strong>Anyone interacting with the child:</strong> ${result.userAnswers.anyoneInteracting || 'N/A'}</p>
                             </div>
                             <div>
                                 <h4>Correct Answers:</h4>
                                 <p><strong>Primary:</strong> ${result.correctAnswers.primaryActivity}</p>
-                                <p><strong>Other:</strong> ${(result.correctAnswers.otherActivities || []).join(', ') || 'none'}</p>
-                                <p><strong>Interacting:</strong> ${result.correctAnswers.anyoneInteracting}</p>
+                                <p><strong>Anyone interacting with the child:</strong> ${result.correctAnswers.anyoneInteracting}</p>
                             </div>
                         </div>
                         <div style="margin-top: 10px; font-size: 12px; color: #666;">
@@ -869,6 +946,7 @@ function createTrainingTimeline() {
 timeline.push({
     timeline: [trainingIntro, loadAllTrainingVideos, exampleVideoTrial, createCompleteTrainingTimeline],
     conditional_function: function() {
+        //return false;
         return !window.skipTraining;
     }
 });
@@ -907,7 +985,7 @@ const loadVideos = {
                 });
                 
                 // Get existing annotations
-                const annotationData = await getAnnotationsForVideos(videoFilenames);
+                const annotationData = await getAnnotationsForVideos(videoFilenames, taskType);
                 const annotationMap = annotationData.annotations;
                 
                 // Mark completed videos
@@ -1270,66 +1348,34 @@ function createVideoTrial(videoIndex, isTraining = false, trainingVideoData = nu
                     type: "dropdown",
                     name: "primaryActivity",
                     title: isSeeing 
-                        ? "1. What is the primary thing that the child wearing the camera is seeing?"
+                        ? "1. What is the primary activity that the child wearing the camera is seeing?"
                         : "1. What is the primary activity that the child wearing the camera is doing?",
-                    placeholder: isSeeing ? "Select primary thing seen..." : "Select primary activity...",
+                    placeholder: isSeeing ? "Select primary activity..." : "Select primary activity...",
                     isRequired: true,
-                    choices: dropdownOptions.activities,   
+                    choices: [...dropdownOptions.activities, "no activity"],   
                 },
                 {
                     type: "text",
                     name: "primaryActivityOther",
                     title: isSeeing 
-                        ? "Please specify the primary thing seen:"
+                        ? "Please specify the primary activity seen:"
                         : "Please specify the primary activity:",
                     isRequired: true,
                     visibleIf: "{primaryActivity} = 'other'"
                 },
                 {
-                    type: "dropdown",
-                    name: "primaryActivityConfidence",
-                    title: "2. How confident are you?",
-                    isRequired: true,
-                    choices: [
-                        { value: "1", text: "1 - Low" },
-                        { value: "2", text: "2 - Medium" },
-                        { value: "3", text: "3 - High" }
-                    ]
-                },
-                {
-                    type: "tagbox",
-                    name: "otherActivities",
-                    title: isSeeing
-                        ? "3. What other things is the child wearing the camera seeing? [multi-select]"
-                        : "3. What other activities is the child wearing the camera doing? [multi-select]",
-                    placeholder: "Search and select...",
-                    isRequired: true,
-                    choices: [...dropdownOptions.activities, "none"]
-                },
-                {
                     type: "text",
                     name: "otherActivitiesOther",
                     title: isSeeing
-                        ? "Please specify the other things seen (comma-separated if multiple):"
+                        ? "Please specify the other activities seen (comma-separated if multiple):"
                         : "Please specify the other activities (comma-separated if multiple):",
                     isRequired: true,
                     visibleIf: "{otherActivities} contains 'other'"
                 },
                 {
                     type: "dropdown",
-                    name: "otherActivitiesConfidence",
-                    title: "4. How confident are you?",
-                    isRequired: true,
-                    choices: [
-                        { value: "1", text: "1 - Low" },
-                        { value: "2", text: "2 - Medium" },
-                        { value: "3", text: "3 - High" }
-                    ]
-                },
-                {
-                    type: "dropdown",
                     name: "anyoneInteracting",
-                    title: "5. Is anyone interacting with the child?",
+                    title: "2. Is anyone interacting with the child?",
                     isRequired: true,
                     choices: ["yes", "no"]
                 }
@@ -1344,6 +1390,10 @@ function createVideoTrial(videoIndex, isTraining = false, trainingVideoData = nu
             // Load existing data for main task
             if (!isTraining && video.existingAnnotation) {
                 survey.data = video.existingAnnotation;
+                if (survey.data["primaryActivity"] == "other") {
+                    survey.data["primaryActivityOther"] = survey.data["primaryActivityOther"] || "no activity";
+                }
+                console.log(survey.data["primaryActivity"])
             }
             
             // Handle conditional visibility
