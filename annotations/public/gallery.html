@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Annotation Gallery</title>
+    <link rel="stylesheet" href="activities.css">
+    <style>
+        .gallery-toolbar {
+            display: flex;
+            gap: 10px 16px;
+            align-items: end;
+            flex-wrap: wrap;
+            padding: 14px 16px;
+            margin-bottom: 16px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+        }
+        .gallery-toolbar label { display: flex; flex-direction: column; gap: 4px; margin: 0; font-size: 13px; color: var(--muted); }
+        .gallery-toolbar label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); padding-bottom: 6px; }
+        .gallery-toolbar select, .gallery-toolbar input[type=text] { width: auto; min-width: 120px; margin: 0; }
+        .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+        .seg button {
+            border: 0;
+            border-right: 1px solid var(--border);
+            background: var(--surface);
+            padding: 7px 12px;
+            font: inherit;
+            font-size: 14px;
+            cursor: pointer;
+            color: var(--text);
+        }
+        .seg button:last-child { border-right: 0; }
+        .seg button.active { background: var(--accent); color: #fff; }
+        .seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+        [data-for][hidden] { display: none !important; }
+        .source-note { font-size: 13px; color: var(--muted); margin: -6px 0 14px; }
+        .summary-line { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+
+        .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+        .clip-card {
+            display: flex;
+            flex-direction: column;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+            min-width: 0;
+        }
+        .clip-card .video-frame { width: 100%; height: auto; min-height: 0; aspect-ratio: 16 / 9; border-radius: 0; }
+        .clip-card .video-frame video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+        .clip-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+        .clip-name { font-size: 12px; color: var(--muted); word-break: break-all; }
+        .clip-stats { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; }
+        .stat { padding: 2px 8px; border-radius: 999px; background: var(--surface-alt); border: 1px solid var(--border); }
+        .stat.low { background: var(--bad-bg); color: var(--bad); border-color: transparent; }
+        .stat.mid { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+        .stat.high { background: var(--good-bg); color: var(--good); border-color: transparent; }
+        .stat.gold { background: #fff7d6; color: #7a5b00; border-color: #f0d77a; }
+        .stat.gold.off { background: var(--surface-alt); color: var(--muted); border-color: var(--border); border-style: dashed; }
+        .chip-toggle {
+            margin-left: 6px;
+            padding: 0;
+            border: 0;
+            background: none;
+            font: inherit;
+            font-size: 12px;
+            color: var(--accent);
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        .chip-toggle:disabled { opacity: 0.5; cursor: wait; }
+        .description {
+            font-size: 13px;
+            margin: 0;
+            color: var(--text);
+            display: -webkit-box;
+            -webkit-line-clamp: 4;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            cursor: pointer;
+        }
+        .description.open { display: block; }
+        .votes { display: flex; gap: 6px; flex-wrap: wrap; }
+        .vote {
+            font-size: 13px;
+            padding: 3px 9px;
+            border-radius: 6px;
+            background: var(--surface-alt);
+            border: 1px solid var(--border);
+        }
+        .vote b { font-weight: 700; margin-left: 4px; }
+        .vote.top { border-color: var(--accent); }
+        .vote.focus { background: #e0e9ff; border-color: var(--accent); color: var(--accent-hover); }
+        .model-line { font-size: 13px; }
+        .model-line .unconfirmed { color: var(--bad); font-weight: 600; }
+        .model-line .confirmed { color: var(--good); font-weight: 600; }
+        details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+        details p { font-size: 13px; margin: 6px 0 0; }
+        .answers { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+        .answers th, .answers td { text-align: left; padding: 3px 6px 3px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+        .answers th { color: var(--muted); font-weight: 600; }
+        .add-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-top: 4px; }
+        .add-form label { margin: 0; font-size: 13px; }
+        .add-form select { margin-top: 3px; }
+        .add-form .full { grid-column: 1 / -1; }
+        .add-form textarea {
+            width: 100%;
+            min-height: 54px;
+            margin-top: 3px;
+            padding: 6px 8px;
+            font: inherit;
+            font-size: 13px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            resize: vertical;
+        }
+        .add-form .hint { font-size: 12px; color: var(--muted); }
+        .more-wrap { text-align: center; margin: 20px 0; }
+        @media (max-width: 600px) {
+            .gallery-grid { grid-template-columns: 1fr; }
+            .add-form { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-left"><strong>Annotation Gallery</strong></div>
+        <div class="topbar-right">
+            <a class="btn btn-small" href="admin.html">← Admin</a>
+            <a class="btn btn-small" href="gold.html">Gold standards</a>
+        </div>
+    </header>
+
+    <main id="app">
+        <div class="gallery-toolbar">
+            <label>Source
+                <span class="seg" id="source">
+                    <button type="button" data-value="current">Main clips (this app)</button>
+                    <button type="button" data-value="model">All model detections</button>
+                </span>
+            </label>
+            <label>Task
+                <span class="seg" id="task">
+                    <button type="button" data-value="do">Doing</button>
+                    <button type="button" data-value="see">Seeing</button>
+                </span>
+            </label>
+            <label>Activity
+                <select id="focus"></select>
+            </label>
+            <label data-for="current">Show clips where
+                <select id="relation-current">
+                    <option value="near">someone said it, the majority didn't (negatives)</option>
+                    <option value="mention">anyone said it</option>
+                    <option value="majority">the majority said it</option>
+                    <option value="model">the model detected it, the majority didn't</option>
+                </select>
+            </label>
+            <label data-for="model">Show clips where
+                <select id="relation-model">
+                    <option value="detected">the model detected it</option>
+                    <option value="model-only">the model detected it, earlier coders mostly didn't (negatives)</option>
+                    <option value="coders-only">earlier coders saw it, the model labeled something else</option>
+                </select>
+            </label>
+            <label data-for="model">Checked by
+                <select id="checked">
+                    <option value="all">Any clip</option>
+                    <option value="checked">Any earlier pass</option>
+                    <option value="validation">Model validation (DD/JY/VM)</option>
+                    <option value="original">Original doing/seeing pass</option>
+                    <option value="unchecked">Never checked</option>
+                </select>
+            </label>
+            <label data-for="model">Model label
+                <select id="model-activity"><option value="">Any</option></select>
+            </label>
+            <label data-for="current">Agreement
+                <select id="agreement">
+                    <option value="">Any</option>
+                    <option value="split">Not unanimous</option>
+                    <option value="low">50% or less</option>
+                </select>
+            </label>
+            <label data-for="current">Interaction
+                <select id="interaction">
+                    <option value="">Any</option>
+                    <option value="split">Coders disagree</option>
+                    <option value="yes">Majority yes</option>
+                    <option value="no">Majority no</option>
+                </select>
+            </label>
+            <label data-for="current">Answers
+                <select id="min-votes">
+                    <option value="0">Any (incl. not yet annotated)</option>
+                    <option value="1">1+</option>
+                    <option value="2">2+</option>
+                    <option value="3">3+</option>
+                </select>
+            </label>
+            <label data-for="current">Sort
+                <select id="sort-current">
+                    <option value="agreement">Lowest agreement first</option>
+                    <option value="focus">Most answers for the activity</option>
+                    <option value="votes">Most answers</option>
+                    <option value="name">Filename</option>
+                </select>
+            </label>
+            <label data-for="model">Sort
+                <select id="sort-model">
+                    <option value="random">Random</option>
+                    <option value="validation">Least validated first</option>
+                    <option value="name">Filename</option>
+                </select>
+            </label>
+            <label>Search
+                <input type="text" id="search" placeholder="Filename or coder…">
+            </label>
+            <label class="check"><input type="checkbox" id="hide-gold"> Hide clips already in gold standards</label>
+            <button type="button" class="btn btn-small" id="reshuffle" data-for="model">🔀 Reshuffle</button>
+        </div>
+        <p id="source-note" class="source-note"></p>
+        <div class="summary-line"><span id="count" class="muted"></span></div>
+        <div id="grid" class="gallery-grid"></div>
+        <div class="more-wrap"><button type="button" id="more" class="btn" hidden>Show more</button></div>
+    </main>
+
+    <div id="login-modal" class="modal" role="dialog" aria-modal="true" hidden>
+        <div class="modal-backdrop"></div>
+        <form id="login-form" class="modal-panel modal-small">
+            <h2>Log in</h2>
+            <label>Username <input name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+            <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+            <p id="login-error" class="error" hidden>Login failed. Please try again.</p>
+            <button type="submit" class="btn btn-primary">Log in</button>
+        </form>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="gallery.js"></script>
+</body>
+</html>

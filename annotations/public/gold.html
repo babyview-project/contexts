@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gold Standards Editor</title>
+    <link rel="stylesheet" href="activities.css">
+    <style>
+        .gold-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+        .gold-toolbar label { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 400; }
+        .gold-toolbar select { width: auto; }
+        .gold-list { display: flex; flex-direction: column; gap: 16px; }
+        .gold-item {
+            display: grid;
+            grid-template-columns: 300px minmax(0, 1fr);
+            gap: 20px;
+            padding: 16px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-left: 5px solid var(--good);
+            border-radius: var(--radius);
+        }
+        .gold-item.has-problem { border-left-color: var(--bad); }
+        .gold-item.unused { border-left-color: var(--border); }
+        .gold-item.unused.has-problem { border-left-color: var(--bad); }
+        .gold-status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+        .use-pill { font-size: 13px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+        .use-pill.on { background: var(--good-bg); color: var(--good); }
+        .use-pill.off { background: var(--surface-alt); color: var(--muted); border: 1px solid var(--border); }
+        .gold-item .video-frame { height: auto; width: 300px; min-height: 0; }
+        .gold-meta { font-size: 13px; color: var(--muted); margin-bottom: 10px; word-break: break-all; }
+        .gold-meta strong { color: var(--text); }
+        .gold-problem { color: var(--bad); font-weight: 600; margin-bottom: 10px; }
+        .gold-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .gold-fields label { margin: 0; }
+        .gold-fields select { margin-top: 4px; }
+        .gold-fields .full { grid-column: 1 / -1; }
+        .gold-fields textarea {
+            width: 100%;
+            min-height: 64px;
+            margin-top: 4px;
+            padding: 8px 10px;
+            font: inherit;
+            font-size: 14px;
+            font-weight: 400;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            resize: vertical;
+        }
+        .gold-actions { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+        .saved-note { color: var(--good); font-size: 13px; }
+        @media (max-width: 900px) {
+            .gold-item { grid-template-columns: 1fr; }
+            .gold-item .video-frame { width: 100%; max-width: 300px; }
+            .gold-fields { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-left"><strong>Gold Standards Editor</strong></div>
+        <div class="topbar-right">
+            <a class="btn btn-small" href="admin.html">← Admin</a>
+            <a class="btn btn-small" href="gallery.html">Gallery</a>
+            <a class="btn btn-small" href="/api/admin/gold.csv">Download gold_standards.csv</a>
+        </div>
+    </header>
+
+    <main id="app">
+        <p class="muted">
+            Edits are saved straight to <code>gold_standards.csv</code> on this server (the previous version is
+            kept in <code>backups/</code>) and take effect for training immediately. Download the CSV afterwards
+            to copy it into the repo.
+        </p>
+        <div class="gold-toolbar">
+            <label><input type="radio" name="show" value="problems" checked> Needs fixing</label>
+            <label><input type="radio" name="show" value="all"> All rows</label>
+            <label>Task
+                <select id="task-filter">
+                    <option value="">Both</option>
+                    <option value="do">Doing</option>
+                    <option value="see">Seeing</option>
+                </select>
+            </label>
+            <label>Type
+                <select id="type-filter">
+                    <option value="">All</option>
+                    <option value="example">Example</option>
+                    <option value="gold">Gold (practice)</option>
+                    <option value="candidate">Candidate (from the gallery; ignored by the app)</option>
+                    <option value="other">Other types (ignored by the app)</option>
+                    <option value="unused">Everything not used by the app (incl. turned off)</option>
+                </select>
+            </label>
+            <span id="count" class="muted"></span>
+        </div>
+        <div id="gold-list" class="gold-list"></div>
+    </main>
+
+    <div id="login-modal" class="modal" role="dialog" aria-modal="true" hidden>
+        <div class="modal-backdrop"></div>
+        <form id="login-form" class="modal-panel modal-small">
+            <h2>Log in</h2>
+            <label>Username <input name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+            <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+            <p id="login-error" class="error" hidden>Login failed. Please try again.</p>
+            <button type="submit" class="btn btn-primary">Log in</button>
+        </form>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="gold.js"></script>
+</body>
+</html>

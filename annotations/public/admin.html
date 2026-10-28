@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Annotation Admin</title>
+    <link rel="stylesheet" href="activities.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-left"><strong>Annotation Admin</strong></div>
+        <div class="topbar-right">
+            <a class="btn btn-small" href="gallery.html">Gallery</a>
+            <a class="btn btn-small" href="gold.html">Gold standards</a>
+            <span class="muted" style="font-size: 13px;">Open in dev mode:</span>
+            <a class="btn btn-small" href="activities.html?type=do&amp;dev=1" target="_blank">Doing</a>
+            <a class="btn btn-small" href="activities.html?type=see&amp;dev=1" target="_blank">Seeing</a>
+            <span id="updated" class="muted" style="font-size: 13px;"></span>
+            <button type="button" id="refresh-btn" class="btn btn-small">Refresh</button>
+        </div>
+    </header>
+
+    <main id="app">
+        <div id="warnings"></div>
+
+        <h2>Coverage</h2>
+        <div id="coverage"></div>
+
+        <div style="display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; margin: 28px 0 12px;">
+            <h2 style="margin: 0;">Coders</h2>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <input type="text" id="filter" placeholder="Filter IDs…" style="width: 200px;">
+                <a class="btn btn-small" href="/api/admin/export?training=false">Export main annotations</a>
+                <a class="btn btn-small" href="/api/admin/export?training=true">Export training annotations</a>
+            </div>
+        </div>
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th rowspan="2">Annotator ID</th>
+                        <th colspan="3">Doing</th>
+                        <th colspan="3">Seeing</th>
+                    </tr>
+                    <tr>
+                        <th>Training</th><th>Best score</th><th>Clips done</th>
+                        <th>Training</th><th>Best score</th><th>Clips done</th>
+                    </tr>
+                </thead>
+                <tbody id="coders"></tbody>
+            </table>
+        </div>
+    </main>
+
+    <div id="login-modal" class="modal" role="dialog" aria-modal="true" hidden>
+        <div class="modal-backdrop"></div>
+        <form id="login-form" class="modal-panel modal-small">
+            <h2>Log in</h2>
+            <label>Username <input name="username" type="text" autocomplete="username" required></label>
+            <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+            <p id="login-error" class="error" hidden>Login failed. Please try again.</p>
+            <button type="submit" class="btn btn-primary">Log in</button>
+        </form>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

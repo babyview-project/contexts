@@ -1,0 +1,16 @@
+# Secrets and accounts
+.env
+users.json
+credentials/
+
+# Deployment state on node14 (MongoDB data, conda env, logs, gold standards backups)
+db/
+env/
+logs/
+backups/
+*.log
+
+# Clips and derived data (rebuilt by scripts/build_clip_folder.py and scripts/build_gallery_data.py)
+clips/
+data/
+node_modules/

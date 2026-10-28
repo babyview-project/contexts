@@ -1,0 +1,24 @@
+{
+  "auth": {
+    "mode": "accounts"
+  },
+  "assignment": {
+    "videosPerCoder": 50,
+    "ratingsPerClip": 5
+  },
+  "training": {
+    "maxAttempts": 3,
+    "videosPerAttempt": 5,
+    "passThreshold": 0.75
+  },
+  "videos": {
+    "mainDir": "clips",
+    "mainListFile": "clips/main_clips.csv",
+    "trainingDirs": [
+      "clips"
+    ]
+  },
+  "test": {
+    "fakeVideoCount": 12
+  }
+}
