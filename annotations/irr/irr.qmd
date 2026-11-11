@@ -1,0 +1,528 @@
+---
+title: "Activity annotations: reliability and gold standard difficulty"
+subtitle: "Batch main-v1"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    embed-resources: true
+    fig-format: svg
+execute:
+  warning: false
+  message: false
+params:
+  collapse_playing: false    # merge the "playing with …" activities into "playing" (IRR and attention checks only)
+  min_overlap: 10            # minimum shared clips for a coder pair's Cohen's κ
+  first_attempt_only: false  # gold standard difficulty: first practice attempt only
+---
+
+```{r setup}
+source("helpers.R")
+
+ann <- read_csv("data/annotations.csv", col_types = cols(isTraining = "l", isAttentionCheck = "l", attemptNumber = "i"))
+attempts <- read_csv("data/training_attempts.csv")
+gold <- read_csv("data/gold_standards.csv", na = character(), col_types = cols(disabled = "l"))
+checks <- read_csv("data/attention_checks.csv")
+
+coarse <- function(x) if (params$collapse_playing) if_else(str_starts(x, "playing"), "playing", x) else x
+ann <- mutate(ann, activity = coarse(primaryActivity))
+main <- filter(ann, !isTraining, !isAttentionCheck)
+mains <- split(main, main$taskType)[TASKS]
+
+# Results for every task × field combination, row-bound
+by_task_field <- function(f) {
+  map_dfr(TASKS, \(t) map_dfr(names(FIELDS), \(fld) f(t, fld) |> mutate(task = t, field = factor(FIELDS[[fld]], FIELDS), .before = 1)))
+}
+```
+
+Data come from `export_main_v1.py`, which reads the annotation site's MongoDB and keeps batch main-v1 only.
+
+- **IRR** uses main clips only, leaving out training and attention checks.
+- **Gold standard difficulty** uses every practice attempt, graded against the current `gold_standards.csv`.
+- Settings for this render: collapse playing = `r params$collapse_playing`, min shared clips for κ = `r params$min_overlap`, first practice attempt only = `r params$first_attempt_only`.
+
+# Coverage
+
+```{r coverage}
+main |>
+  summarise(coders = n_distinct(annotatorName), main_annotations = n(), .by = taskType) |>
+  left_join(main |>
+              summarise(raters = n_distinct(annotatorName), .by = c(taskType, videoFilename)) |>
+              summarise(clips_rated = n(), clips_2plus_raters = sum(raters >= 2), raters_per_clip = mean(raters), .by = taskType),
+            by = "taskType") |>
+  rename(task = taskType) |>
+  arrange(task) |>
+  knitr::kable(digits = 1)
+```
+
+```{r coverage-coders}
+main |>
+  summarise(clips = n_distinct(videoFilename), last_annotation = max(updatedAt), .by = c(taskType, annotatorName)) |>
+  arrange(taskType, desc(clips)) |>
+  rename(task = taskType, coder = annotatorName) |>
+  show_table()
+```
+
+# Inter-rater reliability
+
+- **Krippendorff's α** (nominal) uses every clip with at least 2 raters. It handles a different set of coders on each clip. The 95% CI comes from a bootstrap over clips.
+- **Pairwise agreement** is raw agreement between coders on the same clip.
+- **Mean pairwise κ** averages Cohen's κ over coder pairs that share at least `r params$min_overlap` clips.
+
+```{r irr}
+kappas <- by_task_field(\(t, f) pair_kappas(mains[[t]], f, params$min_overlap))
+counts <- map(set_names(TASKS), \(t) map(set_names(names(FIELDS)), \(f) count_matrix(mains[[t]], f)))
+
+by_task_field(\(t, f) {
+  n <- counts[[t]][[f]]
+  ci <- bootstrap_alpha(n)
+  k <- filter(kappas, task == t, field == FIELDS[[f]])
+  tibble(clips = nrow(n), krippendorff_alpha = kripp_alpha(n), alpha_95ci = sprintf("[%.2f, %.2f]", ci[1], ci[2]),
+         pairwise_agreement = pairwise_agreement(n), mean_pairwise_kappa = mean(k$kappa, na.rm = TRUE),
+         coder_pairs = nrow(k))
+}) |>
+  knitr::kable(digits = 3)
+```
+
+## α vs. number of clips
+
+**Random clips** (solid): for each subset size, α is recomputed on 200 random subsets of the clips with ≥2 raters. The line is the median and the band covers the middle 95%. Once the band is narrow and the line is flat, adding clips won't change α much. The band shrinks to a point at the full set by construction.
+
+**Best clips first** (dashed): clips are ranked by starting from all of them and repeatedly dropping the one whose removal raises α most, then adding them back in reverse. This is the highest α you can get from that many clips, so it's a diagnostic for which clips pull α down, not an estimate of reliability. Clips at the bottom of the ranking are worth re-watching or tightening the label definitions for.
+
+Dashed gray lines mark Krippendorff's 0.667 (tentative) and 0.80 (reliable) thresholds.
+
+```{r alpha-curve}
+#| fig-width: 10
+#| fig-height: 4
+curves <- by_task_field(\(t, f) alpha_curve(counts[[t]][[f]]))
+orders <- by_task_field(\(t, f) best_order(counts[[t]][[f]]))
+
+ggplot(curves, aes(clips, color = field, fill = field)) +
+  geom_hline(yintercept = c(0.667, 0.8), color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_ribbon(aes(ymin = alpha_lo, ymax = alpha_hi), alpha = 0.15, color = NA) +
+  geom_line(aes(y = alpha_median, linetype = "random clips"), linewidth = 0.8) +
+  geom_point(aes(y = alpha_median), size = 1.2) +
+  geom_line(data = orders, aes(rank, alpha_through_here, linetype = "best clips first"), linewidth = 0.8) +
+  facet_wrap(~task) +
+  scale_color_manual(values = FIELD_COLORS) +
+  scale_fill_manual(values = FIELD_COLORS) +
+  scale_linetype_manual(values = c("random clips" = "solid", "best clips first" = "22")) +
+  labs(x = "Clips included (of clips with ≥2 raters)", y = "Krippendorff's α", color = NULL, fill = NULL, linetype = NULL) +
+  theme_irr()
+```
+
+Clip ranking, best first:
+
+```{r alpha-ranking}
+show_table(orders)
+```
+
+## Agreement by label
+
+Specific agreement: when one coder chooses a label, the share of the other coders on that clip who chose it too. Labels with low agreement are the ones coders confuse.
+
+```{r specific}
+by_task_field(\(t, f) specific_agreement(counts[[t]][[f]])) |> show_table()
+```
+
+## By coder
+
+Agreement with the other coders on the same clips. Coders near the top (sorted by primary activity agreement, lowest first) are outliers worth checking.
+
+```{r by-coder}
+coder_agreement <- by_task_field(\(t, f) {
+  mains[[t]] |>
+    mutate(label = .data[[f]]) |>
+    mutate(m = n(), .by = videoFilename) |>
+    mutate(same = n(), .by = c(videoFilename, label)) |>
+    filter(m >= 2) |>
+    summarise(agreement = mean((same - 1) / (m - 1)), .by = annotatorName)
+})
+coder_kappa <- bind_rows(rename(kappas, coder = coder_a), rename(kappas, coder = coder_b)) |>
+  summarise(mean_kappa = mean(kappa, na.rm = TRUE), .by = c(task, field, coder))
+
+coder_agreement |>
+  rename(coder = annotatorName) |>
+  left_join(coder_kappa, by = c("task", "field", "coder")) |>
+  pivot_wider(names_from = field, values_from = c(agreement, mean_kappa), names_glue = "{field}: {.value}") |>
+  left_join(main |> summarise(clips = n_distinct(videoFilename), .by = c(taskType, annotatorName)),
+            by = c(task = "taskType", coder = "annotatorName")) |>
+  relocate(clips, .after = coder) |>
+  arrange(task, `Primary activity: agreement`) |>
+  show_table()
+```
+
+Pairwise κ for every coder pair with at least `r params$min_overlap` shared clips:
+
+```{r pair-kappas}
+show_table(kappas)
+```
+
+## Most contested main clips
+
+Sorted by the share of raters who chose the most common activity, lowest first.
+
+```{r contested}
+label_summary <- function(x) fmt_counts(sort(table(x), decreasing = TRUE))
+top_share <- function(x) max(table(x)) / length(x)
+
+main |>
+  summarise(raters = n_distinct(annotatorName),
+            activities = label_summary(activity), top_activity_share = top_share(activity),
+            interacting = label_summary(anyoneInteracting), top_interacting_share = top_share(anyoneInteracting),
+            .by = c(taskType, videoFilename)) |>
+  filter(raters >= 2) |>
+  arrange(taskType, top_activity_share, top_interacting_share) |>
+  rename(task = taskType) |>
+  show_table(digits = 2)
+```
+
+# Gold standard difficulty
+
+Each practice answer is compared with the current gold label in `gold_standards.csv`.
+
+- A gold label edited after coders answered is graded with the new label, so this can differ from what coders were shown.
+- "Correct" requires both the activity and the interaction answer to match, as on the site.
+- Grading uses the raw activity labels; the "collapse playing" setting only applies to IRR.
+
+```{r gold}
+graded <- ann |>
+  filter(isTraining, !params$first_attempt_only | attemptNumber == 1) |>
+  left_join(gold, by = c("taskType", "videoFilename"))
+practice <- graded |>
+  filter(!is.na(gold_activity)) |>
+  mutate(activity_correct = primaryActivity == gold_activity,
+         interacting_correct = anyoneInteracting == gold_interacting,
+         correct = activity_correct & interacting_correct)
+
+practice |>
+  summarise(practice_answers = n(), coders = n_distinct(annotatorName), fully_correct = mean(correct),
+            activity_correct = mean(activity_correct), interacting_correct = mean(interacting_correct), .by = taskType) |>
+  left_join(graded |> summarise(answers_without_gold_row = sum(is.na(gold_activity)), .by = taskType), by = "taskType") |>
+  rename(task = taskType) |>
+  arrange(task) |>
+  knitr::kable(digits = 2)
+```
+
+Answers without a gold row are for clips that are no longer gold rows for that task in `gold_standards.csv`. They are left out.
+
+## Hardest gold clips
+
+Sorted by the share of fully correct answers, lowest first.
+
+```{r gold-clips}
+wrong_answers <- function(answers, gold) label_summary(answers[answers != gold[1]])
+
+practice |>
+  summarise(gold_activity = first(gold_activity), gold_interacting = first(gold_interacting),
+            responses = n(), coders = n_distinct(annotatorName),
+            correct = mean(correct), activity_correct = mean(activity_correct), interacting_correct = mean(interacting_correct),
+            wrong_activities = wrong_answers(primaryActivity, gold_activity),
+            wrong_interacting = wrong_answers(anyoneInteracting, gold_interacting),
+            disabled = first(disabled), old_video_filename = first(old_video_filename),
+            pa_reasoning = first(pa_reasoning), ai_reasoning = first(ai_reasoning),
+            .by = c(taskType, videoFilename)) |>
+  arrange(taskType, correct, activity_correct, desc(responses)) |>
+  rename(task = taskType) |>
+  show_table(digits = 2)
+```
+
+## By gold activity
+
+```{r gold-labels}
+practice |>
+  summarise(clips = n_distinct(videoFilename), responses = n(), activity_correct = mean(activity_correct),
+            correct = mean(correct), .by = c(taskType, gold_activity)) |>
+  arrange(taskType, activity_correct) |>
+  rename(task = taskType) |>
+  show_table(digits = 2)
+```
+
+Most common mix-ups: the gold activity and the wrong activity coders chose instead.
+
+```{r gold-confusions}
+practice |>
+  filter(!activity_correct) |>
+  count(task = taskType, gold_activity, answered_instead = primaryActivity, name = "times", sort = TRUE) |>
+  show_table()
+```
+
+## Practice attempts
+
+```{r attempts}
+per_coder <- attempts |>
+  summarise(attempts = max(attemptNumber), passed = any(passed), .by = c(taskType, annotatorName))
+
+per_coder |>
+  summarise(coders = n(), passed_training = sum(passed), .by = taskType) |>
+  rename(task = taskType) |>
+  arrange(task) |>
+  knitr::kable()
+
+attempts |>
+  summarise(coders = n_distinct(annotatorName), mean_score = mean(score), passed = mean(passed),
+            .by = c(taskType, attemptNumber)) |>
+  arrange(taskType, attemptNumber) |>
+  rename(task = taskType) |>
+  arrange(task) |>
+  knitr::kable(digits = 2)
+
+per_coder |>
+  arrange(taskType, desc(attempts)) |>
+  rename(task = taskType, coder = annotatorName) |>
+  show_table()
+```
+
+## Attention checks
+
+```{r attention}
+ann |>
+  filter(isAttentionCheck) |>
+  inner_join(checks, by = c("taskType", "videoFilename")) |>
+  mutate(passed = activity == coarse(expected_activity)) |>
+  summarise(checks = n(), passed = sum(passed), .by = c(taskType, annotatorName)) |>
+  arrange(taskType, passed) |>
+  rename(task = taskType, coder = annotatorName) |>
+  show_table()
+```
+
+# Doing vs. seeing: α with the best clips first
+
+Each curve ranks one task's clips with `best_order` (greedily drop the clip whose removal raises α most, then add them back in reverse). The top row is Krippendorff's α over the top $k$ clips. The bottom row is raw pairwise agreement over the same top $k$ clips, in the same order. The dotted vertical line marks the last rank where α is still at least 0.80: the most clips that task can keep while staying reliable.
+
+The green curve is do with *looking around* merged into *no activity*. It only differs from do for primary activity.
+
+**Caveat:** the ranking and the α it reports use the same annotations, so the curve is optimistic. Clips at the top are partly there because their coders happened to agree. New coders on those clips would agree less (regression to the mean). The split-half check below measures how much.
+
+```{r best-first}
+#| fig-width: 10
+#| fig-height: 6.4
+MERGED_DO <- "do, looking around = no activity"
+merged_order <- best_order(count_matrix(mutate(mains$do, activity = replace(activity, activity == "looking around", "no activity")), "activity")) |>
+  mutate(task = MERGED_DO, field = factor(FIELDS[["activity"]], FIELDS), .before = 1)
+best <- bind_rows(orders, merged_order) |>
+  mutate(task = factor(task, names(TASK_COLORS)))
+crossings <- best |>
+  summarise(clips = n(), alpha_all_clips = last(alpha_through_here), agreement_all_clips = last(agreement_through_here),
+            clips_at_alpha_0.8 = alpha_crossing(alpha_through_here), share_at_alpha_0.8 = clips_at_alpha_0.8 / clips,
+            agreement_at_alpha_0.8 = agreement_through_here[clips_at_alpha_0.8],
+            alpha_at = alpha_through_here[clips_at_alpha_0.8], .by = c(field, task))
+
+best_long <- best |>
+  pivot_longer(c(alpha_through_here, agreement_through_here), names_to = "metric") |>
+  mutate(metric = factor(metric, c("alpha_through_here", "agreement_through_here"), c("Krippendorff's α", "Pairwise agreement")))
+cross_pts <- crossings |>
+  filter(!is.na(clips_at_alpha_0.8)) |>
+  pivot_longer(c(alpha_at, agreement_at_alpha_0.8), names_to = "metric") |>
+  mutate(metric = factor(metric, c("alpha_at", "agreement_at_alpha_0.8"), levels(best_long$metric)))
+
+ggplot(best_long, aes(rank, value, color = task)) +
+  geom_hline(data = tibble(metric = levels(best_long$metric)[1]), aes(yintercept = 0.8), color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_vline(data = cross_pts, aes(xintercept = clips_at_alpha_0.8, color = task), linetype = "dotted", linewidth = 0.5, show.legend = FALSE) +
+  geom_line(linewidth = 0.8) +
+  geom_point(data = cross_pts, aes(clips_at_alpha_0.8, value), size = 2.2, shape = 21, fill = NA, stroke = 1.2, show.legend = FALSE) +
+  facet_grid(metric ~ field, switch = "y") +
+  scale_color_manual(values = TASK_COLORS) +
+  labs(x = "Clips included, best first", y = NULL, color = NULL) +
+  theme_irr() +
+  theme(strip.placement = "outside")
+
+crossings |> select(-alpha_at) |> knitr::kable(digits = 3)
+```
+
+## Split-half check: how much of the best-first curve is luck?
+
+For each clip, its coders are randomly split into a **ranking half** (3 coders, or 2 when the clip has 4) and a **held-out half** (the other 2). Clips are ranked with `best_order` using the ranking half only, and α over the top $k$ clips is computed on each half. This is repeated over 5 random splits and the lines are the mean.
+
+- **Ranking half** (solid) is optimistic, like the curve above: it's the data the ranking was chosen on.
+- **Held-out half** (dashed) is what fresh coders on the same top $k$ clips would give. The gap between the lines is the regression to the mean.
+- At all clips the order doesn't matter, so both lines end at the ordinary α (up to split noise).
+
+```{r split-half}
+#| fig-width: 10
+#| fig-height: 4
+split <- by_task_field(\(t, f) map_dfr(0:4, \(s) split_curves(mains[[t]], f, s)) |>
+  summarise(across(everything(), mean), .by = rank))
+
+split |>
+  pivot_longer(c(ranking_half, held_out_half), names_to = "half") |>
+  mutate(half = factor(half, c("ranking_half", "held_out_half"), c("ranking half", "held-out half"))) |>
+  ggplot(aes(rank, value, color = task, linetype = half)) +
+  geom_hline(yintercept = 0.8, color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_line(linewidth = 0.8) +
+  facet_wrap(~field) +
+  scale_color_manual(values = TASK_COLORS) +
+  scale_linetype_manual(values = c("ranking half" = "solid", "held-out half" = "22")) +
+  labs(x = "Clips included, best first (ranked on the ranking half)", y = "Krippendorff's α", color = NULL, linetype = NULL) +
+  theme_irr()
+
+split |>
+  summarise(clips = n(), clips_at_alpha_0.8_ranking_half = alpha_crossing(ranking_half),
+            clips_at_alpha_0.8_held_out = alpha_crossing(held_out_half),
+            held_out_alpha_at_ranking_crossing = held_out_half[clips_at_alpha_0.8_ranking_half],
+            alpha_all_clips_held_out = last(held_out_half), .by = c(field, task)) |>
+  knitr::kable(digits = 3)
+```
+
+# Consensus clips
+
+A main clip has **consensus** when at least 80% of its coders chose the same primary activity: 4 or 5 of 5, or 4 of 4 (some see clips have only 4 coders). The bars show, for each activity, the share of all main clips with consensus on that activity, so a panel's bars add up to the consensus rate in its title. The table also gives each activity's share of the consensus clips. It follows the "collapse playing" setting.
+
+```{r consensus}
+#| fig-width: 10
+#| fig-height: 5
+consensus <- main |>
+  count(taskType, videoFilename, activity) |>
+  mutate(share = n / sum(n), clips = n_distinct(videoFilename), .by = taskType) |>
+  mutate(share = n / sum(n), .by = c(taskType, videoFilename)) |>
+  filter(share >= 0.8) |>
+  count(task = taskType, clips, activity, name = "consensus_clips") |>
+  mutate(share_of_all_clips = consensus_clips / clips,
+         share_of_consensus_clips = consensus_clips / sum(consensus_clips), .by = task)
+titles <- consensus |>
+  summarise(n = sum(consensus_clips), total = first(clips), .by = task) |>
+  mutate(title = sprintf("%s: %d of %d clips (%.0f%%) have consensus", task, n, total, 100 * n / total))
+
+consensus |>
+  complete(task, activity, fill = list(share_of_all_clips = 0)) |>
+  left_join(select(titles, task, title), by = "task") |>
+  mutate(activity = fct_reorder(activity, share_of_all_clips, sum)) |>
+  ggplot(aes(share_of_all_clips, activity, fill = task)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = if_else(share_of_all_clips > 0, sprintf(if_else(share_of_all_clips < 0.01, "%.1f%%", "%.0f%%"), 100 * share_of_all_clips), "")),
+            hjust = -0.15, size = 2.6, color = "#3b3b38") +
+  facet_wrap(~title) +
+  scale_fill_manual(values = TASK_COLORS, guide = "none") +
+  scale_x_continuous(labels = scales::percent, expand = expansion(mult = c(0, 0.12))) +
+  labs(x = "Share of all main clips", y = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.y = element_blank(), panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+
+consensus |> select(-clips) |> arrange(task, desc(consensus_clips)) |> show_table(page_length = 20)
+```
+
+# Confusion matrices
+
+For one task, clip $u$ has $m_u$ coders and $n_{ui}$ of them chose label $i$. The **coincidence matrix** counts every ordered pair of coders on the same clip, weighted so each annotation adds 1 in total:
+
+$$o_{ij} = \sum_u \frac{n_{ui}\,(n_{uj} - [i=j])}{m_u - 1}$$
+
+It is symmetric, so "coder A" and "coder B" are interchangeable. It is the matrix Krippendorff's α is built from.
+
+For **do vs. see**, every do coder on a clip is paired with every see coder on that clip, and each clip is weighted 1:
+
+$$c_{ij} = \sum_u \frac{n^{\text{do}}_{ui}}{m^{\text{do}}_u}\cdot\frac{n^{\text{see}}_{uj}}{m^{\text{see}}_u}$$
+
+Rows are do labels and columns are see labels. The two tasks share most labels. *being moved around* and *looking around* exist only in do, and *conversing* only in see.
+
+Three views of either matrix $M$:
+
+- **Counts** are $M_{ij}$.
+- **Row proportions** are $M_{ij} / \sum_k M_{ik}$: when the row coder says $i$, how often the column coder says $j$.
+- **PMI** is $\log_2 \frac{M_{ij}\, M_{\cdot\cdot}}{M_{i\cdot}\, M_{\cdot j}}$: above 0 means the pair co-occurs more than the label frequencies predict. Empty cells are left blank.
+
+Labels are ordered by how often they were chosen, the same on both axes, so agreement sits on the diagonal.
+
+```{r confusion}
+#| results: asis
+#| fig-width: 8
+#| fig-height: 7
+sources <- c("Do: coder vs. coder" = "do", "See: coder vs. coder" = "see", "Do vs. see" = "cross")
+kinds <- c("Counts" = "count", "Row proportions" = "proportion", "PMI" = "pmi")
+for (src in names(sources)) {
+  ax <- if (sources[[src]] == "cross") c("See coder", "Do coder") else c("Coder B", "Coder A")
+  for (f in names(FIELDS)) {
+    cat("\n\n##", src, "·", FIELDS[[f]], "\n\n::: {.panel-tabset}\n\n")
+    m <- confusion_matrix(mains, sources[[src]], f)
+    for (k in names(kinds)) {
+      cat("\n\n###", k, "\n\n")
+      print(plot_confusion(m, kinds[[k]], paste(src, "·", FIELDS[[f]]), ax[1], ax[2]))
+    }
+    cat("\n\n:::\n\n")
+  }
+}
+```
+
+# Doing vs. seeing: do the two tasks agree?
+
+Whether anyone is interacting with the child doesn't depend on the task, so a do coder and a see coder should agree on it as often as two coders on the same task. Primary activity is expected to differ more, because the label sets and the question differ.
+
+For a matrix $M$ with proportions $p_{ij} = M_{ij}/M_{\cdot\cdot}$:
+
+$$p_o = \sum_i p_{ii}, \qquad p_e = \sum_i p_{i\cdot}\,p_{\cdot i}, \qquad \kappa = \frac{p_o - p_e}{1 - p_e}$$
+
+- **Within do / within see** use the coincidence matrix. There, κ equals Krippendorff's α up to its $n/(n-1)$ small-sample correction.
+- **Do × see** uses $c_{ij}$, with chance from each task's own label frequencies. A do coder and a see coder are never the same person, as within a task.
+- **Do × see − within** is the cross-task κ minus the mean of the two within-task κs. If the tasks measure the same thing, it should be about 0.
+- The 95% CIs bootstrap over clips (1000 draws), resampling the same clips for every row so the difference has a valid CI.
+- **Control:** pairing each clip's do coders with a random other clip's see coders should give κ ≈ 0.
+
+```{r cross-kappa}
+p_o <- function(m) sum(diag(m)) / sum(m)
+kappa_stats <- function(d, s) {
+  k <- c(matrix_kappa(coincidence(d)), matrix_kappa(coincidence(s)), matrix_kappa(cross_task(d, s)))
+  c(k, k[3] - mean(k[1:2]))
+}
+comparisons <- c("within do", "within see", "do × see", "do × see − within")
+
+set.seed(0)
+map_dfr(names(FIELDS), \(f) {
+  a <- aligned_counts(mains, f)
+  d <- a$do; s <- a$see
+  boots <- replicate(1000, { i <- sample.int(nrow(d), replace = TRUE); kappa_stats(d[i, ], s[i, ]) })
+  ci <- apply(boots, 1, quantile, c(0.025, 0.975))
+  shuffled <- cross_task(d, s[sample.int(nrow(s)), ])
+  bind_rows(
+    tibble(comparison = comparisons,
+           agreement = c(p_o(coincidence(d)), p_o(coincidence(s)), p_o(cross_task(d, s)), NA),
+           kappa = kappa_stats(d, s), kappa_95ci = sprintf("[%.2f, %.2f]", ci[1, ], ci[2, ])),
+    tibble(comparison = "do × see, clips shuffled (control)", agreement = p_o(shuffled),
+           kappa = matrix_kappa(shuffled), kappa_95ci = "")
+  ) |>
+    mutate(field = FIELDS[[f]], clips = nrow(d), .before = 1)
+}) |>
+  knitr::kable(digits = 3)
+```
+
+## Share of coders saying someone is interacting, per clip
+
+Each point is a clip: the share of its do coders (x) and see coders (y) who answered *yes*. Point area shows how many clips share a position.
+
+**Acceptance criterion:** if the tasks measure the same thing, clips fall along the diagonal, with no more spread off it than within-task disagreement explains. A cloud shifted to one side of the diagonal means one task says *yes* more often. Clips in the off-diagonal corners (do unanimous one way, see unanimous the other) are worth re-watching.
+
+```{r interacting-scatter}
+#| fig-width: 5
+#| fig-height: 5
+a <- aligned_counts(mains, "anyoneInteracting")
+share <- tibble(do = a$do[, "yes"] / rowSums(a$do), see = a$see[, "yes"] / rowSums(a$see))
+
+ggplot(count(share, do = round(do, 3), see = round(see, 3), name = "clips"), aes(do, see)) +
+  geom_abline(color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_point(aes(size = clips), color = "#2a78d6", alpha = 0.75) +
+  scale_size_area(max_size = 12) +
+  coord_equal(xlim = c(0, 1), ylim = c(0, 1)) +
+  labs(x = "Do coders saying yes", y = "See coders saying yes", size = "Clips",
+       title = sprintf("r = %.2f over %d clips · mean yes: do %.2f, see %.2f",
+                       cor(share$do, share$see), nrow(share), mean(share$do), mean(share$see))) +
+  theme_irr() +
+  theme(panel.grid.major.x = element_line(color = GRID, linewidth = 0.4), plot.title = element_text(size = 9))
+```
+
+## Clips where do and see disagree most
+
+Sorted by the share of do × see coder pairs on the clip that agree, lowest first.
+
+```{r cross-clips}
+map_dfr(names(FIELDS), \(f) {
+  a <- aligned_counts(mains, f)
+  fmt <- \(x) apply(x, 1, \(r) fmt_counts(sort(r, decreasing = TRUE)))
+  tibble(field = FIELDS[[f]], videoFilename = rownames(a$do),
+         do_labels = fmt(a$do), see_labels = fmt(a$see),
+         do_top = colnames(a$do)[max.col(a$do, "first")], see_top = colnames(a$see)[max.col(a$see, "first")],
+         cross_agreement = rowSums((a$do / rowSums(a$do)) * (a$see / rowSums(a$see))))
+}) |>
+  arrange(field, cross_agreement) |>
+  show_table(digits = 2)
+```
