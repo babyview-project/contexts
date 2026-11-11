@@ -1,0 +1,5 @@
+taskType,videoFilename,expected_activity
+do,S00400001_2024-08-27_1_rechu1NSTOGlKmkrJ_chunk0016of0057.mp4,screen time
+do,S00820001_2024-04-09_2_recgdybwHSDNiC68V_rotated_chunk0078of0083.mp4,reading time
+see,S00240001_2023-11-26_1_rectcOZdXnrHOgNkH_rotated_chunk0096of0102.mp4,eating/drinking
+see,S00400003_2024-05-30_3_recWTAjzIAY8se05U_chunk0004of0108.mp4,screen time

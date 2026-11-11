@@ -526,3 +526,441 @@ map_dfr(names(FIELDS), \(f) {
   arrange(field, cross_agreement) |>
   show_table(digits = 2)
 ```
+
+# Models vs. coders
+
+Three video LLMs labelled every main clip's primary activity for do and see (`inference/vlm_label_scoring.py`). Each model was shown the clip (16 frames), the coders' task description and the label definitions. It scored every label as its whole answer, which gives a probability for each label. Its **prediction** is the most probable label. The models weren't asked whether anyone is interacting, so this section covers primary activity only. It follows the "collapse playing" setting, summing the probabilities of merged labels.
+
+Each model is compared with the coders on the same clip, as if it were one more coder. The rows use clips with ≥2 coders.
+
+- **Agreement** is the share of a clip's coders who chose the model's label, averaged over clips. For *coders (each other)* it is the pairwise agreement from the IRR table.
+- **κ** pairs the model with every coder on the clip, each clip weighted 1, with chance from the model's and the coders' label frequencies (like do × see above). For coders it is the within-task κ.
+- **Plurality match** is the share of clips (with a single most common coder label) where the model chose that label. **Consensus match** is the same for clips where ≥80% of coders agree.
+- **Surprisal** is the mean $-\log_2 p$ of the coders' labels under the model, in bits. Lower is better.
+- **Most frequent label (no video)** is the baseline, explained below.
+- 95% CIs bootstrap over clips (1000 draws), resampling the same clips for every row.
+
+**What the baseline is.** A baseline is the score a rater gets without doing the task, so a model's numbers only mean something next to it. *Most frequent label (no video)* never looks at a clip. It gives every clip the label coders chose most often for that task, and gives each label its share of all coder answers as its probability. Its agreement is what knowing only which labels are common buys you. κ subtracts that chance level, so the baseline's κ is 0 by construction, and a model's κ above 0 is what it got from the video. The baseline's surprisal is the entropy of the label frequencies: a model with lower surprisal puts more probability on the coders' labels than label frequencies alone would. The other reference row, *coders (each other)*, is the ceiling: how well one person matches the other people on the same clip.
+
+```{r models}
+#| fig-width: 10
+#| fig-height: 3.4
+models <- list.files("data/models", "\\.csv$", full.names = TRUE) |>
+  map_dfr(\(f) read_csv(f, show_col_types = FALSE))
+inputs <- map(set_names(TASKS), \(t) model_inputs(mains[[t]], models, t, coarse))
+
+raters <- function(inp) {
+  base <- baseline_rater(inp$n)
+  c(setNames(list(list(top = NULL, p = NULL)), CODERS), setNames(list(base), BASELINE),
+    map(inp$probs, \(p) list(top = one_hot(p), p = p)))
+}
+set.seed(0)
+model_stats <- map_dfr(TASKS, \(t) {
+  inp <- inputs[[t]]
+  rs <- raters(inp)
+  rows <- \(x, i) if (is.null(x)) NULL else x[i, , drop = FALSE]
+  stat <- \(i) map(rs, \(r) rater_stats(inp$n[i, , drop = FALSE], rows(r$top, i), rows(r$p, i)))
+  point <- stat(seq_len(nrow(inp$n)))
+  boots <- replicate(1000, stat(sample.int(nrow(inp$n), replace = TRUE)), simplify = FALSE)
+  map_dfr(names(rs), \(r) {
+    b <- map(boots, r)
+    ci <- \(k) quantile(map_dbl(b, k), c(0.025, 0.975), na.rm = TRUE)
+    as_tibble_row(as.list(point[[r]])) |>
+      mutate(task = t, rater = r, clips = nrow(inp$n),
+             agreement_lo = ci("agreement")[1], agreement_hi = ci("agreement")[2],
+             kappa_lo = ci("kappa")[1], kappa_hi = ci("kappa")[2], .before = 1)
+  })
+}) |>
+  mutate(rater = factor(rater, rev(names(RATER_COLORS))))
+
+ggplot(model_stats, aes(kappa, rater, color = rater)) +
+  geom_vline(xintercept = 0, color = REF, linewidth = 0.4) +
+  geom_errorbar(aes(xmin = kappa_lo, xmax = kappa_hi), width = 0, linewidth = 0.8, orientation = "y") +
+  geom_point(size = 2.6) +
+  geom_text(aes(label = sprintf("%.2f", kappa)), nudge_y = 0.32, size = 2.6, color = "#3b3b38") +
+  facet_wrap(~task) +
+  scale_color_manual(values = RATER_COLORS, guide = "none") +
+  labs(x = "κ with the clip's coders", y = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.y = element_blank(), panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+
+model_stats |>
+  arrange(task, desc(rater)) |>
+  transmute(task, rater, clips, agreement, agreement_95ci = sprintf("[%.2f, %.2f]", agreement_lo, agreement_hi),
+            kappa, kappa_95ci = sprintf("[%.2f, %.2f]", kappa_lo, kappa_hi),
+            plurality_match, consensus_match, surprisal_bits) |>
+  knitr::kable(digits = 3)
+```
+
+## Model vs. model
+
+How often the models agree with each other, on the same clips as above. Compare κ here with κ between coders in the table above: models that agree with each other more than coders do are making the same choices, right or wrong.
+
+- **Agreement** is the share of clips where both models predict the same label. **κ** corrects it for chance with each model's own label frequencies. These compare two *different* models, so they are below 1 wherever the models pick different labels for the same clip.
+- **Both match plurality** is the share of clips (with a single most common coder label) where both models chose that label. **Same wrong label** is the share where both chose the same label and it isn't the coders' plurality label: a shared mistake.
+- The κ 95% CI bootstraps over clips (1000 draws).
+
+```{r model-pairs}
+set.seed(0)
+model_pair_stats <- map_dfr(TASKS, \(t) {
+  inp <- inputs[[t]]
+  boots <- replicate(1000, {
+    i <- sample.int(nrow(inp$n), replace = TRUE)
+    model_pairs(inp$n[i, , drop = FALSE], map(inp$probs, \(p) p[i, , drop = FALSE]))$kappa
+  })
+  ci <- apply(boots, 1, quantile, c(0.025, 0.975))
+  model_pairs(inp$n, inp$probs) |>
+    mutate(task = t, clips = nrow(inp$n), .before = 1) |>
+    mutate(kappa_95ci = sprintf("[%.2f, %.2f]", ci[1, ], ci[2, ]), kappa_lo = ci[1, ], kappa_hi = ci[2, ], .after = kappa)
+})
+knitr::kable(select(model_pair_stats, -kappa_lo, -kappa_hi), digits = 3)
+```
+
+### Who agrees with whom
+
+Every κ in this section on one scale, with 95% CIs: coders with each other, each model with the coders (from the first table) and each pair of models. A model pair to the right of the coders' line agrees with each other more than people do with each other.
+
+```{r who-agrees}
+#| fig-width: 10
+#| fig-height: 4.6
+who <- bind_rows(
+  model_stats |> filter(rater != BASELINE) |>
+    transmute(task, pair = if_else(rater == CODERS, "coders vs. coders", paste(rater, "vs. coders")),
+              kind = if_else(rater == CODERS, "coders vs. coders", "model vs. coders"), kappa, kappa_lo, kappa_hi),
+  model_pair_stats |> transmute(task, pair = paste(model_a, "vs.", model_b), kind = "model vs. model", kappa, kappa_lo, kappa_hi)
+) |>
+  mutate(pair = fct_inorder(pair))
+ggplot(who, aes(kappa, fct_rev(pair), color = kind)) +
+  geom_vline(data = filter(who, kind == "coders vs. coders"), aes(xintercept = kappa), color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_errorbar(aes(xmin = kappa_lo, xmax = kappa_hi), width = 0, linewidth = 0.8, orientation = "y") +
+  geom_point(size = 2.4) +
+  geom_text(aes(label = sprintf("%.2f", kappa)), nudge_y = 0.33, size = 2.5, color = "#3b3b38") +
+  facet_wrap(~task) +
+  scale_color_manual(values = c("coders vs. coders" = "#3b3b38", "model vs. coders" = "#eda100", "model vs. model" = "#6250d6")) +
+  labs(x = "κ (dashed: coders vs. coders)", y = NULL, color = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.y = element_blank(), panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+```
+
+## Models vs. consensus labels
+
+The comparisons above score a model against every coder on a clip, so a clip the coders split on counts against everyone. Here the target is the **consensus label**: on clips where at least 80% of coders chose the same primary activity (as in *Consensus clips*), that label is treated as the right answer.
+
+- **Accuracy** is the share of consensus clips where the rater gave the consensus label. **κ** corrects it for chance with the rater's and the consensus labels' frequencies.
+- **A single coder** is each coder on the clip scored against the consensus label, which they are part of. It is high partly by construction (on a 4-of-5 clip, 4 coders are right), so read it as a reference, not a fair contest.
+- **Most frequent label (no video)** always answers the coders' most common label for the task, as before.
+- 95% CIs bootstrap over the consensus clips (1000 draws).
+
+```{r consensus-models}
+#| fig-width: 10
+#| fig-height: 3.4
+set.seed(0)
+cons_stats <- map_dfr(TASKS, \(t) {
+  inp <- inputs[[t]]
+  cons <- apply(inp$n / rowSums(inp$n), 1, max) >= 0.8
+  nc <- inp$n[cons, , drop = FALSE]
+  rs <- c(list("a single coder" = NULL), setNames(list(baseline_rater(inp$n)$top[cons, , drop = FALSE]), BASELINE),
+          map(inp$probs, \(p) one_hot(p[cons, , drop = FALSE])))
+  map_dfr(names(rs), \(r) {
+    st <- \(i) consensus_stats(nc[i, , drop = FALSE], if (is.null(rs[[r]])) NULL else rs[[r]][i, , drop = FALSE])
+    b <- replicate(1000, st(sample.int(nrow(nc), replace = TRUE)))
+    as_tibble_row(as.list(st(seq_len(nrow(nc))))) |>
+      mutate(task = t, rater = r, .before = 1) |>
+      mutate(accuracy_lo = quantile(b["accuracy", ], 0.025), accuracy_hi = quantile(b["accuracy", ], 0.975),
+             kappa_lo = quantile(b["kappa", ], 0.025, na.rm = TRUE), kappa_hi = quantile(b["kappa", ], 0.975, na.rm = TRUE))
+  })
+}) |>
+  mutate(rater = factor(rater, c("a single coder", BASELINE, names(MODEL_COLORS))))
+
+ggplot(cons_stats, aes(kappa, fct_rev(rater), color = rater)) +
+  geom_vline(xintercept = 0, color = REF, linewidth = 0.4) +
+  geom_errorbar(aes(xmin = kappa_lo, xmax = kappa_hi), width = 0, linewidth = 0.8, orientation = "y") +
+  geom_point(size = 2.6) +
+  geom_text(aes(label = sprintf("%.2f", kappa)), nudge_y = 0.32, size = 2.6, color = "#3b3b38") +
+  facet_wrap(~task) +
+  scale_color_manual(values = c("a single coder" = "#3b3b38", setNames("#9a9992", BASELINE), MODEL_COLORS), guide = "none") +
+  labs(x = "κ against the consensus label", y = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.y = element_blank(), panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+
+cons_stats |>
+  transmute(task, rater, clips, accuracy, accuracy_95ci = sprintf("[%.2f, %.2f]", accuracy_lo, accuracy_hi),
+            kappa, kappa_95ci = sprintf("[%.2f, %.2f]", kappa_lo, kappa_hi)) |>
+  knitr::kable(digits = 3)
+```
+
+Accuracy by consensus label: on the consensus clips with each label, the share where the rater gave it.
+
+```{r consensus-labels}
+map_dfr(TASKS, \(t) consensus_by_label(inputs[[t]]$n, inputs[[t]]$probs) |> mutate(task = t, .before = 1)) |>
+  pivot_wider(names_from = rater, values_from = accuracy) |>
+  arrange(task, desc(clips)) |>
+  show_table(page_length = 20)
+```
+
+## Model confusion matrices
+
+Rows are the coders' labels and columns the model's prediction, each clip weighted 1 (a clip's coders split its weight). Row proportions: when coders say $i$, how often the model says $j$. Labels are ordered as in the coder confusion matrices.
+
+```{r model-confusion}
+#| results: asis
+#| fig-width: 8
+#| fig-height: 7
+for (t in TASKS) {
+  cat("\n\n### ", t, "\n\n::: {.panel-tabset}\n\n", sep = "")
+  inp <- inputs[[t]]
+  for (mdl in names(inp$probs)) {
+    cat("\n\n#### ", mdl, "\n\n", sep = "")
+    m <- order_confusion(crossprod(inp$n / rowSums(inp$n), one_hot(inp$probs[[mdl]])))
+    print(plot_confusion(m, "proportion", paste(t, "·", mdl), "Model", "Coders"))
+  }
+  cat("\n\n:::\n\n")
+}
+```
+
+## Human vs. model confusion matrices
+
+Do the models confuse the same activities people do? The coders' matrix is the coincidence matrix as row proportions: when a coder says *i*, the share of the other coders on the clip who say *j*. A model's matrix is the one above: when coders say *i*, the share of the time the model says *j*. Both are on the same clips and labels.
+
+**Similarity** is the Pearson r between two matrices' off-diagonal cells: where answers go when they leave the coders' label. It uses rows (coder labels) with at least 10 coder answers, since rarer rows are mostly noise. r near 1 means the two put their mistakes on the same labels.
+
+Every comparison splits the clips into two random halves and builds one matrix from each half, so no clip is counted in both and every r rests on the same amount of data. The figure is the mean over 200 splits, and the bars are the middle 95% of splits. Comparing two different raters averages both directions (A's matrix from the first half against B's from the second, and the reverse).
+
+- **Coders vs. coders (reference)** is the coders' matrix from one half against the coders' matrix from the other: how alike two independent sets of human data are. It is the ceiling for the rows below.
+- **Model, two halves of clips** is within each model: its confusion matrix from one half of the clips against its matrix from the other half. It is below 1 because the two halves are different clips, so it measures how stable the model's confusion pattern is, the same way the coders' reference does. (A model scored twice on the same clips gives identical predictions, so that comparison would be 1 and tell you nothing.)
+- **Coders vs. model** is how human-like each model's confusions are. Near the reference means the model confuses what people confuse.
+- **Model vs. model** is across models: whether they share a pattern of mistakes.
+
+```{r confusion-similarity}
+#| fig-width: 10
+#| fig-height: 3.8
+conf_sim <- map_dfr(TASKS, \(t) confusion_similarity(inputs[[t]]$n, inputs[[t]]$probs) |> mutate(task = t, .before = 1)) |>
+  identity()
+conf_sim |>
+  mutate(pair = fct_rev(fct_inorder(pair))) |>
+  ggplot(aes(r, pair, color = comparison)) +
+  geom_vline(xintercept = 0, color = REF, linewidth = 0.4) +
+  geom_errorbar(aes(xmin = r_lo, xmax = r_hi), width = 0, linewidth = 0.8, orientation = "y") +
+  geom_point(size = 2.4) +
+  geom_text(aes(label = sprintf("%.2f", r)), nudge_y = 0.33, size = 2.5, color = "#3b3b38") +
+  facet_wrap(~task) +
+  scale_color_manual(values = c("coders vs. coders (reference)" = "#3b3b38", "model, two halves of clips" = "#e87ba4", "coders vs. model" = "#eda100", "model vs. model" = "#6250d6")) +
+  labs(x = "Similarity of off-diagonal confusions (Pearson r, mean over split halves)", y = NULL, color = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.y = element_blank(), panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+
+conf_sim |>
+  transmute(task, comparison, pair, rows_used = rows, r, r_95range = sprintf("[%.2f, %.2f]", r_lo, r_hi)) |>
+  knitr::kable(digits = 3)
+```
+
+### Where the models' confusions differ from people's
+
+Each cell is the model's row proportion minus the coders', in the coders' label order. Red cells are confusions the model makes more often than people do; blue cells are ones it makes less often. On the diagonal, blue means the model gives the coders' label less often than another coder would. Values of at least ±0.05 are printed.
+
+```{r confusion-difference}
+#| results: asis
+#| fig-width: 8
+#| fig-height: 7
+conf_cmp <- map_dfr(TASKS, \(t) confusion_compare(inputs[[t]]$n, inputs[[t]]$probs) |> mutate(task = t, .before = 1))
+for (t in TASKS) {
+  cat("\n\n#### ", t, "\n\n::: {.panel-tabset}\n\n", sep = "")
+  for (mdl in names(inputs[[t]]$probs)) {
+    cat("\n\n##### ", mdl, "\n\n", sep = "")
+    print(plot_difference(filter(conf_cmp, task == t, model == mdl), paste(t, "·", mdl, "minus coders")))
+  }
+  cat("\n\n:::\n\n")
+}
+```
+
+## By label
+
+Per label: the share of coder answers (each clip weighted 1) and of model predictions that are this label. **Recall**: when coders choose it, how often the model does. **Precision**: when the model chooses it, the share of coders who agree. A model share far above the coder share is a label the model overuses.
+
+```{r model-labels}
+map_dfr(TASKS, \(t) map_dfr(names(inputs[[t]]$probs), \(mdl) {
+  inp <- inputs[[t]]
+  model_label_table(inp$n, one_hot(inp$probs[[mdl]])) |> mutate(task = t, model = mdl, .before = 1)
+})) |>
+  arrange(task, model, desc(coder_share)) |>
+  show_table(page_length = 20)
+```
+
+## Clips where the models miss the coders
+
+Each model's prediction, with its probability, next to the coders' labels. Sorted by the share of coders who chose the models' labels (averaged over models), lowest first.
+
+```{r model-clips}
+map_dfr(TASKS, \(t) {
+  inp <- inputs[[t]]
+  share <- inp$n / rowSums(inp$n)
+  preds <- map(inp$probs, \(p) {
+    i <- max.col(p, "first")
+    list(text = sprintf("%s (%.2f)", colnames(p)[i], p[cbind(seq_len(nrow(p)), i)]), hit = rowSums(one_hot(p) * share))
+  })
+  tibble(task = t, videoFilename = rownames(inp$n),
+         coder_labels = apply(inp$n, 1, \(r) fmt_counts(sort(r, decreasing = TRUE))),
+         !!!map(preds, "text"),
+         mean_coder_share = rowMeans(sapply(preds, \(x) x$hit)))
+}) |>
+  arrange(task, mean_coder_share) |>
+  show_table(digits = 2)
+```
+
+# Clips to review
+
+## Hardest clips
+
+Each point is a main clip (with ≥2 coders, scored by every model). **Coder agreement** (x) is the share of coder pairs on the clip that chose the same primary activity. **Model agreement** (y) is the share of the clip's coders who chose each model's label, averaged over the three models. **Difficulty** is 1 minus the mean of the two, so clips in the bottom left (coders split *and* models miss) are the hardest. The `r N_HARD <- 15; N_HARD` hardest per task are numbered and listed in the table, which also has every clip's coder labels and model predictions so you can find and re-watch them. Points are jittered slightly so equal values don't hide each other.
+
+Clips high on the left (coders split, models agree with some coders) are ambiguous between labels; clips low on the right (coders agree, models miss) are model failures rather than hard clips.
+
+```{r hard-clips}
+#| fig-width: 10
+#| fig-height: 5
+hard <- map_dfr(TASKS, \(t) hard_clips(inputs[[t]]$n, inputs[[t]]$probs) |> mutate(task = t, .before = 1))
+set.seed(0)
+hard_plot <- mutate(hard, jx = coder_agreement + runif(n(), -0.012, 0.012), jy = model_agreement + runif(n(), -0.012, 0.012),
+                    hardest = difficulty_rank <= N_HARD)
+ggplot(hard_plot, aes(jx, jy)) +
+  geom_abline(color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_point(aes(color = hardest), size = 1.8, alpha = 0.75) +
+  geom_text(data = filter(hard_plot, hardest), aes(label = difficulty_rank), size = 2.5, nudge_y = 0.03, color = "#3b3b38") +
+  facet_wrap(~task) +
+  scale_color_manual(values = c(`TRUE` = "#e34948", `FALSE` = "#c3c2b7"), labels = c(`TRUE` = sprintf("%d hardest", N_HARD), `FALSE` = "other clips")) +
+  coord_equal(xlim = c(-0.03, 1.03), ylim = c(-0.03, 1.03)) +
+  labs(x = "Coder agreement (coder pairs choosing the same label)", y = "Model agreement with the coders (mean over models)", color = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+
+show_table(select(hard, -coders), digits = 2)
+```
+
+## Anyone interacting: clips to review
+
+Whether anyone is interacting with the child is the same question in both tasks, so each clip's do and see coders are pooled: 5 + 5 = 10 annotations per clip, from 10 different people (no one coded both tasks on a clip). `r inter <- interacting_review(mains); sum(inter$annotations < 10)` clips have 9, because only 4 coders did the see task on them; the *annotations* column shows which.
+
+Clips are ranked by **pooled agreement**, the share of the clip's coder pairs that gave the same answer, lowest first. A 5–5 split is the lowest possible (0.44). Ties are broken by the **task gap**, the difference between the share of do coders and of see coders saying *yes*, so clips where the two tasks disagree come first. The chart shows the `r N_INTER <- 25; N_INTER` most contested clips: the do and see shares saying *yes*, joined by a line, with the pooled share as a black tick. The table has every clip.
+
+```{r hard-interacting}
+#| fig-width: 10
+#| fig-height: 6.5
+inter |>
+  slice_head(n = N_INTER) |>
+  mutate(clip = fct_rev(fct_inorder(sprintf("%d · %s", review_rank, short_clip(videoFilename))))) |>
+  ggplot(aes(y = clip)) +
+  geom_vline(xintercept = 0.5, color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_segment(aes(x = do_share_yes, xend = see_share_yes, yend = clip), color = "#c3c2b7", linewidth = 1.2) +
+  geom_point(aes(x = do_share_yes, color = "do"), size = 2.4) +
+  geom_point(aes(x = see_share_yes, color = "see"), size = 2.4) +
+  geom_point(aes(x = share_yes), shape = "|", size = 5, color = "#3b3b38") +
+  scale_color_manual(values = TASK_COLORS) +
+  scale_x_continuous(limits = c(0, 1), labels = scales::percent) +
+  labs(x = "Coders saying someone is interacting (| = pooled over both tasks)", y = NULL, color = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.y = element_blank(), panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+
+show_table(inter, digits = 2)
+```
+
+## Most confusable activities
+
+For each pair of activities, how much coders split between them, from the coincidence matrix of each task (see *Confusion matrices*).
+
+- **Weighted pairs** is the pair's cell of the coincidence matrix: coder pairs on the same clip where one chose each label, weighted so each annotation adds 1. It is how much of the task's disagreement this pair accounts for, so the bars rank pairs by it.
+- **a → b** is when a coder chooses *a*, the share of the other coders on the clip who chose *b* (and **b → a** the reverse). **Confusability**, printed on each bar, is their mean: high for a pair coders treat as interchangeable, even when the labels are rare.
+- **Clips** is how many clips had both labels chosen. The second table lists those clips for every pair, most evenly split first, so you can watch the clips behind a confusion.
+
+```{r confusable}
+#| fig-width: 10
+#| fig-height: 5
+conf <- map_dfr(TASKS, \(t) confusable_pairs(count_matrix(mains[[t]], "activity")) |> mutate(task = t, .before = 1))
+conf_clips <- map_dfr(TASKS, \(t) confusable_clips(count_matrix(mains[[t]], "activity"), filter(conf, task == t)) |> mutate(task = t, .before = 1))
+N_CONF <- 12
+conf |>
+  slice_max(weighted_pairs, n = N_CONF, by = task, with_ties = FALSE) |>
+  mutate(key = factor(paste0(task, "|", label_a, " ↔ ", label_b)), key = fct_reorder(key, weighted_pairs)) |>
+  ggplot(aes(weighted_pairs, key, fill = task)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = sprintf("%.0f%%", 100 * confusability)), hjust = -0.15, size = 2.6, color = "#3b3b38") +
+  facet_wrap(~task, scales = "free_y") +
+  scale_y_discrete(labels = \(x) sub("^[^|]*\\|", "", x)) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+  scale_fill_manual(values = TASK_COLORS, guide = "none") +
+  labs(x = "Weighted disagreeing coder pairs (label = confusability)", y = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.y = element_blank(), panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+
+show_table(conf)
+show_table(conf_clips)
+```
+
+# What would raise reliability?
+
+Primary activity α is about 0.5 for both tasks, against the usual 0.80 bar. This section tries three levers on the annotations already collected, so each is a counterfactual: what α would be if coders had made the same judgments under a different scheme.
+
+## Coarser label sets
+
+Each scheme relabels the raw primary activity labels after the fact and recomputes α (95% CI from a bootstrap over clips). Merging labels can only remove disagreements between the labels it merges, so this is an upper bound on what the merge would give if coders used it. It ignores this report's "collapse playing" setting, since that is one of the schemes.
+
+```{r schemes}
+#| fig-width: 10
+#| fig-height: 3.6
+schemes <- map_dfr(TASKS, \(t) map_dfr(names(SCHEMES), \(s) scheme_alpha(mains[[t]], SCHEMES[[s]]) |> mutate(task = t, scheme = s, .before = 1)))
+schemes |>
+  mutate(scheme = factor(scheme, rev(names(SCHEMES)))) |>
+  ggplot(aes(krippendorff_alpha, scheme, color = task)) +
+  geom_vline(xintercept = c(0.667, 0.8), color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_errorbar(aes(xmin = alpha_lo, xmax = alpha_hi), width = 0, linewidth = 0.8, orientation = "y", position = position_dodge(width = 0.6)) +
+  geom_point(size = 2.4, position = position_dodge(width = 0.6)) +
+  scale_color_manual(values = TASK_COLORS) +
+  scale_x_continuous(limits = c(0.4, 0.85)) +
+  labs(x = "Krippendorff's α, primary activity (dashed: 0.667 and 0.80)", y = NULL, color = NULL) +
+  theme_irr() +
+  theme(panel.grid.major.y = element_blank(), panel.grid.major.x = element_line(color = GRID, linewidth = 0.4))
+
+knitr::kable(schemes, digits = 3)
+```
+
+The *6 broad categories* scheme maps every label like this:
+
+```{r scheme-map}
+tibble(label = radix_sort(ann$primaryActivity)) |>
+  mutate(category = SCHEMES[["6 broad categories"]](label)) |>
+  arrange(category, label) |>
+  summarise(labels = paste(label, collapse = ", "), .by = category) |>
+  knitr::kable()
+```
+
+## Leaving out the least consistent coders
+
+Coders are ranked by their agreement with the other coders on the same clips (as in *By coder*), and α is recomputed without the *k* lowest. **Caveat:** like the best-first curve, this picks coders by the same agreement it then measures, so it overstates the gain from replacing them with new coders.
+
+```{r coder-drop}
+#| fig-width: 10
+#| fig-height: 3.6
+drops <- by_task_field(\(t, f) coder_drop_alpha(mains[[t]], f))
+ggplot(drops, aes(coders_dropped, krippendorff_alpha, color = task)) +
+  geom_hline(yintercept = c(0.667, 0.8), color = REF, linetype = "dashed", linewidth = 0.4) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.8) +
+  facet_wrap(~field) +
+  scale_color_manual(values = TASK_COLORS) +
+  scale_y_continuous(limits = c(0.4, 0.85)) +
+  labs(x = "Least consistent coders left out", y = "Krippendorff's α", color = NULL) +
+  theme_irr()
+
+show_table(drops)
+```
+
+## Aggregating coders
+
+α measures how well *one* coder's label agrees with another's. A label made from several coders (their plurality) is more stable than any one coder's. To see how much, each clip's coders are split at random into 2 coders and the rest (2 or 3), and the table gives how often the two groups' plurality labels match, over 50 random splits (ties go to the first label alphabetically). The *one coder vs. one coder* column is the pairwise agreement from the IRR table, for comparison.
+
+```{r majority}
+by_task_field(\(t, f) majority_stability(mains[[t]], f)) |>
+  left_join(by_task_field(\(t, f) tibble(one_coder_vs_one_coder = pairwise_agreement(counts[[t]][[f]]))), by = c("task", "field")) |>
+  mutate(plurality_95range = sprintf("[%.2f, %.2f]", lo, hi), .after = plurality_labels_agree) |>
+  select(-lo, -hi) |>
+  knitr::kable(digits = 3)
+```
