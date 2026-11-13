@@ -1,0 +1,369 @@
+---
+title: "Activity priority rankings"
+subtitle: "Do the models agree more when told which activity wins a tie?"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: true
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+params:
+  raw_dir: "/data2/tsepuri/vlm_label_scoring/rankings/out"   # node14 scoring outputs; if present, data/models/rankings.csv.gz is rebuilt from them
+  n_boot: 1000                                               # bootstrap resamples of clips
+  posthoc_threshold: 0.10                                    # "ranked afterwards": labels the no-ranking prompt gave more than this are candidates
+---
+
+```{r setup}
+library(tidyverse)
+library(knitr)
+library(RColorBrewer)
+
+theme_set(theme_minimal(base_size = 12) + theme(panel.grid.minor = element_blank(), legend.position = "bottom", plot.margin = margin(5.5, 5.5, 5.5, 60)))
+set.seed(2026)
+
+MODELS <- c("qwen3.8-27b", "internvl3.5-30b-a3b", "kimi-vl-a3b")
+CONDITIONS <- c(instructions = "No ranking",
+                posthoc = sprintf("No ranking, ranked afterwards (> %.2f)", params$posthoc_threshold),
+                ranking = "Ranking", ranking_listed = "Ranking, listed",
+                ranking_moving = "Ranking + moving around", ranking_moving_listed = "Ranking + moving around, listed",
+                other_first = "Ranking, other first", moved_first = "Ranking, moved first",
+                instructions_no_none = "No ranking, no 'no activity'",
+                ranking_listed_no_none = "Ranking, listed, no 'no activity'",
+                ranking_moving_listed_no_none = "Ranking + moving around, listed, no 'no activity'")
+PRIORITY <- jsonlite::fromJSON("../activities.json", simplifyVector = FALSE)$activityPriority
+LOCOMOTION <- list(do = c("walking", "crawling", "being moved around"), see = c("walking", "crawling"))
+VIEWS <- c("As asked", "Locomotion merged")
+
+model_cols <- setNames(brewer.pal(3, "Dark2"), MODELS)
+view_cols <- setNames(brewer.pal(3, "Set2")[1:2], VIEWS)
+
+# Combine the per-shard scoring outputs into one compressed file the report can travel with
+data_file <- "data/models/rankings.csv.gz"
+if (dir.exists(params$raw_dir)) {
+  list.files(params$raw_dir, "_(sample|listed)_shard\\d+of\\d+\\.csv$", full.names = TRUE) |>
+    map_dfr(\(f) read_csv(f, col_types = cols_only(model = "c", condition = "c", task = "c", videoFilename = "c", label = "c", prob = "d"))) |>
+    write_csv(data_file)
+}
+scores <- read_csv(data_file, show_col_types = FALSE) |>
+  mutate(label = recode(label, "playing without toy" = "playing without object"))
+
+ann <- read_csv("data/annotations.csv", col_types = cols(isTraining = "l", isAttentionCheck = "l", attemptNumber = "i")) |>
+  filter(!isTraining, !isAttentionCheck) |>
+  transmute(videoFilename, annotatorName, task = taskType, label = recode(primaryActivity, "playing without toy" = "playing without object"))
+
+# "moving around" replaces the locomotion labels; model probabilities are summed
+merge_locomotion <- function(d, value = "prob") {
+  d <- mutate(d, label = if_else(label %in% LOCOMOTION[[task[1]]], "moving around", label), .by = task)
+  if (value %in% names(d)) summarise(d, "{value}" := sum(.data[[value]]), .by = -all_of(value)) else d
+}
+both_views <- function(d) bind_rows(`As asked` = d, `Locomotion merged` = merge_locomotion(d), .id = "view") |>
+  mutate(view = factor(view, VIEWS))
+
+# Prompt versions still being scored are left out until every model has finished every clip
+coverage <- scores |> distinct(model, condition, task, videoFilename) |> count(model, condition, task, name = "clips")
+n_clips <- max(coverage$clips)
+finished <- coverage |>
+  summarise(done = n() == length(MODELS) && all(clips == n_clips), clips = min(clips), .by = c(condition, task))
+pending <- filter(finished, !done)
+scores <- semi_join(scores, filter(finished, done), by = c("condition", "task"))
+
+tops <- both_views(scores) |>
+  slice_max(prob, n = 1, with_ties = FALSE, by = c(view, model, condition, task, videoFilename)) |>
+  select(view, model, condition, task, videoFilename, label)
+
+# "Ranked afterwards": from the no-ranking prompt's probabilities, every label above the threshold (and always the top
+# label) is a candidate; the candidate in the earliest tier of activities.json's ranking wins, then the more probable one
+tier_of <- function(label, task) {
+  tiers <- map(PRIORITY[[task]], unlist)
+  map_int(label, \(l) {
+    l <- if (l == "moving around") LOCOMOTION[[task]] else l
+    hit <- which(map_lgl(tiers, \(t) any(l %in% t)))
+    if (length(hit)) min(hit) else 1L
+  })
+}
+posthoc <- both_views(filter(scores, condition == "instructions")) |>
+  mutate(tier = tier_of(label, task[1]), .by = task) |>
+  filter(prob > params$posthoc_threshold | prob == max(prob), .by = c(view, model, task, videoFilename)) |>
+  arrange(tier, desc(prob)) |>
+  slice_head(n = 1, by = c(view, model, task, videoFilename)) |>
+  transmute(view, model, condition = "posthoc", task, videoFilename, label)
+tops <- bind_rows(tops, posthoc)
+
+cond_lab <- \(x) factor(CONDITIONS[x], CONDITIONS)
+FACETS <- facet_wrap(~task, scales = "free_x", labeller = labeller(task = c(do = "Do", see = "See")))
+```
+
+The three video LLMs scored every activity label for each clip under several prompt versions. Each version adds a different priority rule to the coders' task instructions:
+
+- **No ranking**: the coders' task instructions and activity definitions only.
+- **Ranking**: the ranking in `activities.json`. For do: any other activity > walking, crawling > being moved around > looking around > other > no activity. For see: any other activity > walking, crawling > other > no activity. The top tier is written as "Any activity not named below (cleaning, cooking, …)".
+- **Ranking, listed**: the same ranking, with every top-tier activity on its own line ("Any of these activities, all ranked equally:").
+- **Ranking + moving around**: the same ranking, with walking, crawling and (for do) being moved around replaced by one "moving around" label. Also run in a **listed** form.
+- **Ranking, other first**: "other" goes right after the specific activities, ahead of locomotion.
+- **Ranking, moved first** (do only): being moved around goes ahead of walking and crawling.
+- **No 'no activity'**: the no-ranking, listed ranking and listed moving-around prompts with the "no activity" label removed, so every clip gets an activity or "other".
+- **No ranking, ranked afterwards**: no new prompt. From the no-ranking prompt's probabilities, every label above `r params$posthoc_threshold` is a candidate, and the candidate highest in the ranking wins.
+
+The clips are the 200 rated main-v1 clips plus 800 random clips from the 2026.1 pool. Each model's answer is its most probable label.
+
+**What the numbers mean.** *Agreement between models* is the share of clips where two models give the same top label, averaged over model pairs, together with Krippendorff's α and Cohen's κ, which correct for chance. All of these use all 1000 clips. *Agreement with coders* uses only the 200 rated clips: it is the share of individual coder ratings that match the model's top label, set against how often two coders agree on the same clip.
+
+```{r coverage}
+tops |> filter(view == "As asked") |> distinct(task, condition, videoFilename) |> count(task, condition, name = "clips") |>
+  mutate(condition = cond_lab(condition)) |> arrange(task, condition) |>
+  pivot_wider(names_from = task, values_from = clips) |>
+  kable(caption = "Clips scored by every model, per prompt version")
+if (nrow(pending)) pending |> transmute(task, condition = cond_lab(condition), `clips so far (slowest model)` = clips) |>
+  kable(caption = "Still being scored, left out of this render")
+```
+
+Prompt versions that merge locomotion offer fewer labels, so agreement can rise just because there are fewer ways to disagree. In the **locomotion merged** view, walking, crawling and being moved around are merged after scoring for every prompt version (summing their probabilities). That puts all versions on the same label set.
+
+# Agreement between models
+
+```{r pair-agreement}
+pairs <- combn(sort(unique(tops$model)), 2, simplify = FALSE)
+pair_tops <- map_dfr(pairs, \(p) {
+  inner_join(filter(tops, model == p[1]), filter(tops, model == p[2]), by = c("view", "condition", "task", "videoFilename")) |>
+    transmute(view, condition, task, videoFilename, pair = paste(p, collapse = " – "), a = label.x, b = label.y)
+})
+
+kappa <- function(a, b) {
+  lv <- union(a, b); a <- factor(a, lv); b <- factor(b, lv)
+  po <- mean(a == b); pe <- sum(prop.table(table(a)) * prop.table(table(b)))
+  (po - pe) / (1 - pe)
+}
+
+pair_stats <- pair_tops |>
+  summarise(agree = mean(a == b), kappa = kappa(a, b), n = n(), .by = c(view, task, condition, pair))
+
+# Clip bootstrap: resample clips, keep each clip's results together across prompt versions and pairs
+agree_by_clip <- pair_tops |>
+  summarise(agree = mean(a == b), .by = c(view, task, condition, videoFilename))   # mean over model pairs
+boot_agree <- agree_by_clip |>
+  nest(.by = c(view, task)) |>
+  mutate(boot = map(data, \(d) {
+    w <- pivot_wider(d, names_from = condition, values_from = agree)
+    conds <- intersect(names(CONDITIONS), names(w))
+    m <- as.matrix(w[conds])
+    b <- replicate(params$n_boot, colMeans(m[sample(nrow(m), replace = TRUE), , drop = FALSE]))
+    b <- matrix(b, nrow = length(conds), dimnames = list(conds, NULL))
+    tibble(condition = conds, est = colMeans(m),
+           lo = apply(b, 1, quantile, .025), hi = apply(b, 1, quantile, .975),
+           diff = est - est[1],
+           diff_lo = apply(b - rep(b[1, ], each = nrow(b)), 1, quantile, .025),
+           diff_hi = apply(b - rep(b[1, ], each = nrow(b)), 1, quantile, .975))
+  })) |>
+  select(-data) |> unnest(boot)
+```
+
+The figure shows the share of clips where two models give the same top label, averaged over the three model pairs. Error bars are 95% bootstrap intervals over clips.
+
+```{r fig-agreement, fig.width = 11, fig.height = 5.5}
+boot_agree |>
+  ggplot(aes(cond_lab(condition), est, colour = view)) +
+  geom_pointrange(aes(ymin = lo, ymax = hi), position = position_dodge(width = .5)) +
+  FACETS +
+  scale_colour_manual(values = view_cols, name = NULL) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = NULL, y = "Same top label (mean over model pairs)") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+```
+
+```{r tbl-diff}
+boot_agree |>
+  transmute(task, view, `Prompt version` = cond_lab(condition),
+            Agreement = sprintf("%.3f [%.3f, %.3f]", est, lo, hi),
+            `Change vs. no ranking` = if_else(condition == "instructions", "—", sprintf("%+.3f [%+.3f, %+.3f]", diff, diff_lo, diff_hi))) |>
+  arrange(task, view, `Prompt version`) |>
+  kable(caption = "Mean pairwise agreement between models, with the paired bootstrap change from the no-ranking prompt")
+```
+
+## Krippendorff's α
+
+Krippendorff's α (nominal) treats the models as raters of each clip, either all three models or qwen and internvl only (kimi is the outlier). Labels are as asked, with no merging after scoring. The dashed line is α among the coders on the rated main-v1 clips. Error bars are 95% bootstrap intervals over clips.
+
+```{r alpha}
+# Nominal α from per-clip label counts (rows = clips, columns = labels); clips with fewer than 2 ratings are dropped
+alpha_nominal <- function(counts) {
+  m <- rowSums(counts); counts <- counts[m >= 2, , drop = FALSE]; m <- m[m >= 2]
+  disagree <- (m * (m - 1) - rowSums(counts * (counts - 1))) / (m - 1)   # ordered disagreeing pairs, weighted
+  nc <- colSums(counts); n <- sum(nc)
+  1 - (n - 1) * sum(disagree) / (n^2 - sum(nc^2))
+}
+count_matrix <- \(d) d |> count(videoFilename, label) |> pivot_wider(names_from = label, values_from = n, values_fill = 0) |>
+  select(-videoFilename) |> as.matrix()
+boot_alpha <- function(counts) {
+  b <- replicate(params$n_boot, alpha_nominal(counts[sample(nrow(counts), replace = TRUE), , drop = FALSE]))
+  tibble(alpha = alpha_nominal(counts), lo = quantile(b, .025), hi = quantile(b, .975))
+}
+
+MODEL_SETS <- list(`All three models` = MODELS, `qwen + internvl` = c("qwen3.8-27b", "internvl3.5-30b-a3b"))
+set_cols <- setNames(brewer.pal(3, "Dark2")[c(3, 1)], names(MODEL_SETS))
+model_alpha <- imap_dfr(MODEL_SETS, \(ms, nm) filter(tops, view == "As asked", model %in% ms) |> mutate(models = nm)) |>
+  mutate(models = factor(models, names(MODEL_SETS))) |>
+  nest(.by = c(models, task, condition)) |>
+  mutate(a = map(data, \(d) boot_alpha(count_matrix(d)))) |>
+  select(-data) |> unnest(a)
+
+coder_alpha <- ann |>
+  nest(.by = task) |>
+  mutate(alpha = map_dbl(data, \(d) alpha_nominal(count_matrix(d)))) |>
+  select(-data)
+```
+
+```{r fig-alpha, fig.width = 11, fig.height = 6.5}
+model_alpha |>
+  ggplot(aes(cond_lab(condition), alpha, colour = models)) +
+  geom_hline(aes(yintercept = alpha), data = coder_alpha, linetype = "dashed", colour = "grey40") +
+  geom_pointrange(aes(ymin = lo, ymax = hi), position = position_dodge(width = .5)) +
+  FACETS +
+  scale_colour_manual(values = set_cols, name = NULL) +
+  scale_y_continuous(limits = c(0.2, 0.7), breaks = seq(0.2, 0.7, 0.1)) +
+  labs(x = NULL, y = "Krippendorff's α", title = "Agreement between models by prompt version", caption = "Dashed: α among coders on the rated main-v1 clips") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+```
+
+```{r tbl-alpha}
+model_alpha |>
+  transmute(task, models, condition = cond_lab(condition), cell = sprintf("%.3f [%.3f, %.3f]", alpha, lo, hi)) |>
+  arrange(condition) |> pivot_wider(names_from = condition, values_from = cell) |>
+  left_join(mutate(coder_alpha, Coders = sprintf("%.3f", alpha), .keep = "unused"), by = "task") |>
+  arrange(task, models) |>
+  kable(caption = "Krippendorff's α between models, with coder α for reference")
+```
+
+Each model pair separately, with Cohen's κ:
+
+```{r tbl-pairs}
+pair_stats |>
+  filter(view == "Locomotion merged") |>
+  mutate(cell = sprintf("%.2f (κ %.2f)", agree, kappa), condition = cond_lab(condition)) |>
+  select(task, pair, condition, cell) |>
+  arrange(condition) |> pivot_wider(names_from = condition, values_from = cell) |>
+  arrange(task, pair) |>
+  kable(caption = "Same top label (Cohen's κ) for each model pair, locomotion merged")
+```
+
+```{r fig-pairs, fig.width = 11, fig.height = 5.5}
+pair_stats |>
+  filter(view == "Locomotion merged") |>
+  ggplot(aes(cond_lab(condition), kappa, colour = pair, group = pair)) +
+  geom_line() + geom_point(size = 2.5) +
+  FACETS +
+  scale_colour_brewer(palette = "Dark2", name = NULL) +
+  labs(x = NULL, y = "Cohen's κ (locomotion merged)") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+```
+
+The correlation of the models' label probabilities (pooled over clips and labels) shows whether the distributions converge, not only the top labels:
+
+```{r tbl-prob}
+both_views(scores) |>
+  pivot_wider(names_from = model, values_from = prob) |>
+  nest(.by = c(view, task, condition)) |>
+  mutate(r = map_dbl(data, \(d) { m <- as.matrix(select(d, any_of(MODELS))); mean(cor(m, use = "pairwise.complete.obs")[upper.tri(diag(ncol(m)))]) })) |>
+  select(-data) |>
+  mutate(condition = cond_lab(condition)) |>
+  pivot_wider(names_from = condition, values_from = r) |>
+  arrange(task, view) |>
+  kable(digits = 3, caption = "Mean pairwise Pearson r of label probabilities")
+```
+
+# Agreement with coders
+
+A model agreeing more with other models only matters if it doesn't drift away from the coders. On the 200 rated main-v1 clips, each model's top label is compared with every individual coder rating. Coders never had a "moving around" option, so this section uses the locomotion merged view for both coders and models. The dashed line is how often two coders agree on the same clip. Versions without "no activity" can never match a coder who chose it, which caps their agreement.
+
+```{r coders}
+ann_m <- merge_locomotion(ann)
+rated <- semi_join(tops, distinct(ann_m, task, videoFilename), by = c("task", "videoFilename")) |>
+  filter(view == "Locomotion merged")
+
+coder_coder <- ann_m |>
+  summarise(pairs = choose(n(), 2), same = sum(choose(table(label), 2)), .by = c(task, videoFilename)) |>
+  summarise(agree = sum(same) / sum(pairs), .by = task)
+
+model_coder_clip <- inner_join(rated, ann_m, by = c("task", "videoFilename"), suffix = c("", "_coder"), relationship = "many-to-many") |>
+  summarise(agree = mean(label == label_coder), .by = c(model, task, condition, videoFilename))
+
+model_coder <- model_coder_clip |>
+  nest(.by = c(model, task, condition)) |>
+  mutate(est = map_dbl(data, \(d) mean(d$agree)),
+         ci = map(data, \(d) quantile(replicate(params$n_boot, mean(sample(d$agree, replace = TRUE))), c(.025, .975))),
+         lo = map_dbl(ci, 1), hi = map_dbl(ci, 2), clips = map_int(data, nrow)) |>
+  select(-data, -ci)
+```
+
+```{r fig-coders, fig.width = 11, fig.height = 5.5}
+model_coder |>
+  ggplot(aes(cond_lab(condition), est, colour = model)) +
+  geom_hline(aes(yintercept = agree), data = coder_coder, linetype = "dashed", colour = "grey40") +
+  geom_pointrange(aes(ymin = lo, ymax = hi), position = position_dodge(width = .5)) +
+  FACETS +
+  scale_colour_manual(values = model_cols, name = NULL) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = NULL, y = "Agreement with individual coder ratings") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+```
+
+```{r tbl-coders}
+model_coder |>
+  mutate(cell = sprintf("%.3f [%.3f, %.3f]", est, lo, hi), condition = cond_lab(condition)) |>
+  select(task, model, condition, cell) |>
+  arrange(condition) |> pivot_wider(names_from = condition, values_from = cell) |>
+  left_join(rename(coder_coder, `Coder–coder` = agree), by = "task") |>
+  arrange(task, model) |>
+  kable(digits = 3, caption = "Agreement of each model's top label with individual coder ratings (locomotion merged), 95% clip bootstrap intervals")
+```
+
+# Agreement of each model with itself
+
+How much does each prompt version change a model's answers? Each cell is the share of clips where the model gives the same top label as it does with the no-ranking prompt, with locomotion merged so versions with and without "moving around" are comparable. Low values mean the prompt changes many answers; that alone says nothing about whether the new answers are better.
+
+```{r intra}
+intra <- tops |>
+  filter(view == "Locomotion merged") |>
+  pivot_wider(names_from = condition, values_from = label) |>
+  pivot_longer(-c(view, model, task, videoFilename, instructions), names_to = "condition", values_to = "label", values_drop_na = TRUE) |>
+  summarise(same = mean(label == instructions), .by = c(model, task, condition))
+```
+
+```{r fig-intra, fig.width = 11, fig.height = 5.5}
+intra |>
+  ggplot(aes(cond_lab(condition), same, colour = model)) +
+  geom_point(size = 2.5, position = position_dodge(width = .5)) +
+  FACETS +
+  scale_colour_manual(values = model_cols, name = NULL) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = NULL, y = "Same top label as with no ranking") +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+```
+
+```{r tbl-intra}
+intra |>
+  mutate(condition = cond_lab(condition)) |> arrange(condition) |>
+  pivot_wider(names_from = condition, values_from = same) |>
+  arrange(task, model) |>
+  kable(digits = 3, caption = "Share of clips where each model's top label matches its no-ranking answer (locomotion merged)")
+```
+
+Which labels does each prompt version use more or less often than the no-ranking prompt? Shares of clips for each label, averaged over the three models, next to the coders' shares on the rated clips:
+
+```{r tbl-shares}
+label_shares <- tops |>
+  filter(view == "Locomotion merged") |>
+  count(task, condition, model, label) |>
+  mutate(share = n / sum(n), .by = c(task, condition, model)) |>
+  summarise(share = mean(share), .by = c(task, condition, label))
+coder_shares <- merge_locomotion(ann) |> count(task, label) |> mutate(share = n / sum(n), .by = task) |> select(-n)
+label_shares |>
+  mutate(condition = cond_lab(condition)) |> arrange(condition) |>
+  pivot_wider(names_from = condition, values_from = share, values_fill = 0) |>
+  mutate(across(any_of(unname(CONDITIONS["moved_first"])), \(x) if_else(task == "see", NA, x))) |>   # do-only version
+  left_join(rename(coder_shares, Coders = share), by = c("task", "label")) |>
+  arrange(task, desc(Coders)) |>
+  kable(digits = 3, caption = "Share of clips per label (mean over models, locomotion merged), with the coders' shares")
+```
